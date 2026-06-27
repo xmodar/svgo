@@ -1,410 +1,78 @@
 # svgo
 
-`svgo` is a pure-Python SVG toolchain for path editing, SVG optimization,
-PNG icon tracing, centerline reconstruction, geometry conversion, matrix
-transforms, measurement, sanitization, viewBox/viewport edits, and SVG
-inspection. It ships as an importable Python package and as a single `svgo`
-command-line program.
+`svgo` is now implemented in Rust. The Python package is a thin PyO3-backed
+binding layer, and all SVG/path/tracing/centerline work is delegated to the
+native `svgo._svgo` extension. A Rust `svgo` binary target is also provided for
+CLI use.
 
-The package has no required runtime dependencies. If `numpy` is installed,
-some centerline distance-transform work can use accelerated array operations;
-otherwise the standard-library fallback is used.
+The project intentionally does not preserve the old pure-Python internals.
 
-## Features
+## What It Does
 
-- Edit SVG path data with ordered operations: translate, scale, affine matrix,
-  rotate, relative/absolute serialization, subpath reversal, origin changes,
-  and path optimization profiles.
-- Optimize whole SVG files with Python implementations of common
-  SVGO-style cleanup and minification operations.
-- Trace simple PNG icons into filled SVG paths without shelling out to
-  external tracing tools.
-- Convert filled stroke outlines into approximate stroked centerlines.
-- Convert SVG geometry primitives to path data and create common affine
-  matrices from Python.
-- Measure path/SVG length, bounds, and point-at-length coordinates.
-- Set, fit, and resize root SVG `viewBox`, `width`, and `height` values.
-- Validate SVG XML, inspect dimensions/element counts/fonts, and run
-  structural conversions such as shape-to-path conversion, plain cleanup,
-  CSS style inlining, sanitization, and transform flattening.
-- Use the same functionality from Python APIs or from the documented CLI.
+- Parses, serializes, transforms, reverses, re-origins, optimizes, and converts
+  SVG path data.
+- Optimizes SVG documents with built-in SVGO-style cleanup passes.
+- Converts basic SVG shapes to paths, flattens transforms, inlines styles,
+  sanitizes unsafe content, edits viewBox/viewport data, and reports metadata.
+- Measures path/SVG bounds, lengths, and point-at-length coordinates.
+- Traces simple PNG icons into SVG paths in Rust.
+- Provides VTracer-style tracing controls through the native Rust tracer.
+- Reconstructs approximate centerline strokes from filled outlines with a Rust
+  rasterize/skeletonize/trace pipeline.
 
-## Installation
+## Layout
 
-From PyPI, once published:
+- `rust/src/lib.rs`: Rust implementation plus PyO3 exports.
+- `rust/src/bin/svgo.rs`: Rust CLI binary target.
+- `src/svgo/*.py`: thin Python shims and dataclass option wrappers.
+- `tests/`: Python tests that exercise the Rust-backed package surface.
 
-```bash
-python -m pip install svgo
+## Build
+
+Use `uv` for Python commands.
+
+```powershell
+uv run --no-project --with maturin maturin build --manifest-path Cargo.toml --out dist
 ```
 
-From this repository:
+On Windows, the GNU build used during local verification required:
 
-```bash
-python -m pip install .
+- Rust toolchain: `stable-x86_64-pc-windows-gnu`
+- MinGW/binutils on `PATH` (`dlltool`, linker runtime DLLs)
+
+The Rust binary can be built directly:
+
+```powershell
+cargo build --bin svgo
 ```
 
-For local development with `uv`:
+## Test
 
-```bash
-uv sync
-uv run svgo --help
+```powershell
+uv run --no-sync python -m unittest discover -s tests
 ```
-
-## CLI
-
-The CLI entry point is `svgo`. It is organized into short subcommands, each
-with a one-letter alias:
-
-```bash
-svgo path   --path "<d>" [--op OP ...] [--svgo]                         # alias: p
-svgo path   --input icon.svg --output icon.out.svg --select all|N|N,N --op OP
-svgo opt    --input icon.svg --output icon.min.svg [optimization options] # alias: o
-svgo trace  --input icon.png --output traced.svg [trace options]          # alias: t
-svgo trace2 --input icon.png --output traced.svg [VTracer options]        # alias: t2
-svgo center --input outline.svg --output stroke.svg [centerline options]  # alias: c
-svgo info   --input icon.svg                                             # alias: i
-svgo validate --input icon.svg [--strict]                                # alias: v
-svgo measure --input icon.svg                                            # alias: m
-svgo sanitize --input icon.svg --output safe.svg                         # alias: s
-svgo viewbox --input icon.svg --fit-content --output fitted.svg          # alias: b
-svgo convert --input icon.svg --output converted.svg [conversion options] # alias: x
-svgo plugins                                                             # alias: l
-```
-
-Every command supports `--help`:
-
-```bash
-svgo --help
-svgo path --help
-svgo opt --help
-svgo trace --help
-svgo trace2 --help
-svgo center --help
-svgo info --help
-svgo validate --help
-svgo measure --help
-svgo sanitize --help
-svgo viewbox --help
-svgo convert --help
-```
-
-## Path Editing
-
-Path operations are applied in order with repeated `--op` flags:
-
-```bash
-svgo path --path "M10 10h5v5z" --op "matrix(-1,0,0,1,30,0)" --minify
-svgo p --input icon.svg --output edited.svg --select 0,2 --op translate:2,-1 --op optimize:safe
-```
-
-Supported operations:
-
-- `translate:dx,dy`
-- `scale:kx,ky`
-- `matrix:a,b,c,d,e,f` or `matrix(a,b,c,d,e,f)`
-- `rotate:ox,oy,degrees`
-- `relative`
-- `absolute`
-- `reverse` or `reverse:itemIndex`
-- `origin:itemIndex` or `origin:itemIndex:subpath`
-- `cubics`, `cubic`, `to-cubics`, or `toCubics`
-- `optimize:safe`, `optimize:size`, `optimize:closed`, `optimize:all`
-- `optimize:remove-useless,use-shorthands,use-hv,use-relative-absolute,use-reverse,use-close-path,remove-orphan-dots`
-
-The affine matrix uses SVG convention:
-
-```text
-x' = a*x + c*y + e
-y' = b*x + d*y + f
-```
-
-Arcs are converted to cubic Beziers during arbitrary affine transforms so
-reflections, rotations, scales, and skews stay fully Python based.
-
-## SVG Optimization
-
-`svgo opt` optimizes SVG documents. `svgo path --svgo` applies the same SVG
-optimizer after path edits:
-
-```bash
-svgo opt --input icon.svg --output icon.min.svg --svgo-multipass --svgo-precision 3
-svgo o --input icon.svg --svgo-disable cleanupIds --svgo-plugin removeDimensions
-svgo opt --input icon.svg --svgo-preset none --svgo-plugin convertShapeToPath --svgo-plugin sortAttrs
-svgo l
-```
-
-Supported options include:
-
-- `--svgo-preset default|none`
-- `--svgo-plugin NAME[:JSON]`
-- `--svgo-disable NAME`
-- `--svgo-precision N`
-- `--svgo-multipass`
-- `--svgo-pretty`
-- `--svgo-indent N`
-- `--svgo-eol lf|crlf`
-- `--svgo-final-newline`
-- `--svgo-datauri base64|enc|unenc`
-- `--svgo-config FILE`
-
-`--svgo-config` accepts JSON files and Python-readable TOML files. JavaScript
-SVGO configs are intentionally rejected because this implementation does not
-execute Node.js.
-
-## PNG Tracing
-
-PNG tracing has two modes. `trace` is the dependency-free pixel tracer: it
-decodes non-interlaced 8-bit PNGs with the standard library, groups visible
-pixels, traces connected-component boundaries, and writes filled SVG paths.
-
-```bash
-svgo trace --input icon.png --output traced.svg --mode palette --curve-mode pixel --max-colors 8 --quantize 24 --min-area 8
-```
-
-Modes:
-
-- `palette`: group pixels into dominant quantized colors.
-- `alpha`: trace a single alpha mask using the most common visible color.
-- `exact`: keep exact quantized color buckets.
-
-Useful options:
-
-- `--curve-mode pixel|exact`: keep exact per-pixel boundaries. This preserves
-  the original tracer behavior.
-- `--drop-white`
-- `--alpha-threshold N`
-- `--white-threshold N`
-- `--quantize N`
-- `--max-colors N`
-- `--min-area N`
-- `--scale N`
-- `--decimals N`
-- `--title TEXT`
-
-For higher-quality curve fitting, use `trace2`/`t2`. It calls the real
-[VTracer](https://github.com/visioncortex/vtracer) Python package when
-installed, or a `vtracer` CLI on `PATH`. The default values match VTracer's
-web-app defaults and the FreeConvert-style controls:
-
-```bash
-svgo trace2 --input icon.png --output traced.svg
-uv run --with vtracer svgo trace2 --input icon.png --output traced.svg
-svgo t2 --input icon.png --output traced.svg --curve-mode spline --filter-speckle 4 --color-precision 6 --gradient-step 16
-```
-
-VTracer options:
-
-- `--color-mode color|binary`
-- `--hierarchical stacked|cutout` or `--clustering stacked|cutout`
-- `--color-precision N`
-- `--gradient-step N`
-- `--filter-speckle N`
-- `--curve-mode pixel|polygon|spline`
-- `--corner-threshold N`
-- `--segment-length N`
-- `--max-iterations N`
-- `--splice-threshold N`
-- `--path-precision N`
-
-## Centerline Reconstruction
-
-Centerline reconstruction converts filled stroke outlines into approximate
-stroked paths by flattening path data, rasterizing with even-odd fill,
-skeletonizing with Zhang-Suen thinning, estimating stroke width, and tracing
-the skeleton.
-
-```bash
-svgo center --path "M0 0L100 0L100 20L0 20Z" --emit path
-svgo c --input traced.svg --output centerline.svg --svg-paths all --mode all --simplify 4
-```
-
-Important options:
-
-- `--emit path|svg|d`
-- `--mode longest|all`
-- `--scale N`
-- `--max-size N`
-- `--curve-samples N`
-- `--simplify N`
-- `--min-length N`
-- `--stroke-width auto|N`
-- `--linecap VALUE`
-- `--linejoin VALUE`
-- `--polyline`
-- `--svg-paths first|all`
-- `--keep-failed`
-
-Centerline output is intentionally approximate. For production icon work,
-render and inspect the result before final minification.
-
-## Inspection And Conversion
-
-`svgo info` prints structured JSON metadata:
-
-```bash
-svgo info --input icon.svg
-svgo i --input icon.svg --compact
-```
-
-`svgo validate` checks SVG XML and reports structural issues. Warnings do not
-make the command fail unless `--strict` is used:
-
-```bash
-svgo validate --input icon.svg
-svgo v --input icon.svg --strict --json
-```
-
-`svgo measure` reports path/SVG length and axis-aligned bounds. It accepts raw
-path data, SVG files, or text files containing path data:
-
-```bash
-svgo measure --path "M0 0H10V10H0Z" --decimals 3
-svgo m --input icon.svg --compact
-svgo m --path "M0 0H10V10" --at 15
-```
-
-`svgo sanitize` removes active or unsafe content while keeping normal static
-SVG geometry:
-
-```bash
-svgo sanitize --input icon.svg --output icon.safe.svg
-svgo s --input icon.svg --remove-external-refs --remove-styles
-```
-
-`svgo viewbox` edits root viewport metadata:
-
-```bash
-svgo viewbox --input icon.svg --set "0 0 24 24" --remove-dimensions
-svgo b --input icon.svg --fit-content --padding 1 --precision 2
-svgo b --input icon.svg --width 48 --height 48
-```
-
-`svgo convert` runs pure-Python structural conversions. With no conversion
-flags it converts basic shapes to paths:
-
-```bash
-svgo convert --input shapes.svg --output paths.svg
-svgo x --input drawing.svg --output plain.svg --to-plain
-svgo x --input transformed.svg --output flat.svg --shapes-to-paths --flatten-transforms
-svgo x --input styled.svg --output inline.svg --inline-styles
-svgo x --input source.svg --output converted.svg --all --precision 3
-```
-
-Conversion options:
-
-- `--to-plain`: remove common editor metadata and editor-specific attributes.
-- `--shapes-to-paths`: convert `rect`, `circle`, `ellipse`, `line`,
-  `polyline`, and `polygon` to `path`.
-- `--flatten-transforms`: bake supported transforms into path coordinates.
-- `--flatten-groups`: collapse empty unstyled groups.
-- `--inline-styles`: inline simple style-element rules into presentation
-  attributes.
-- `--sanitize`: remove scripts, event handlers, and unsafe links before
-  conversion.
-- `--all`: enable every conversion pass.
-- `--precision N`: control generated numeric precision.
 
 ## Python API
 
+The familiar top-level imports remain as thin wrappers:
+
 ```python
-from svgo import (
-    PathData,
-    centerline_path_data,
-    circle_to_path,
-    get_svg_info,
-    fit_viewbox_svg,
-    inline_styles_svg,
-    optimize_svg,
-    path_metrics,
-    path_to_cubics,
-    rect_to_path,
-    resize_svg,
-    sanitize_svg,
-    set_viewbox_svg,
-    trace_png,
-    transform_2d,
-    translate_2d,
-    validate_svg,
-)
+from svgo import PathData, optimize_svg, path_metrics, trace_png
 
-path = PathData.parse("M0 0L10 0L10 10Z")
-path.transform((1, 0, 0, 1, 2, -1))
-path.optimize("safe")
-print(path.to_string(decimals=3, minify=True))
-
-svg = optimize_svg("<svg><rect width='10' height='10'/></svg>")
-shape = rect_to_path(0, 0, 24, 12, rx=2, decimals=3, minify=True)
-cubic = path_to_cubics("M0 0L10 0Q15 0 15 5", decimals=3, minify=True)
-x, y = transform_2d(translate_2d(10, 5), 1, 2)
-report = validate_svg("<svg viewBox='0 0 10 10'/>")
-metrics = path_metrics("M0 0H10V10H0Z", decimals=3)
-safe_svg = sanitize_svg("<svg onload='x()'><path d='M0 0H1'/></svg>")
-fitted_svg = fit_viewbox_svg("<svg><path d='M2 3H6V7H2Z'/></svg>")
+path = PathData.parse("M0 0H10V10Z")
+path.apply_operation("translate:2,3")
+print(path.to_string(decimals=2, minify=True))
 ```
 
-The lower-level modules are:
+Those wrappers perform marshaling only. The computation happens in Rust.
 
-- `svgo.pathdata`
-- `svgo.geometry`
-- `svgo.measure`
-- `svgo.viewport`
-- `svgo.inspect_svg`
-- `svgo.svg_optimize`
-- `svgo.raster_trace`
-- `svgo.centerline`
+## CLI
 
-## Reference Tools
+The Rust binary target supports the existing short command family:
 
-These projects are useful reference points for SVG feature coverage, command
-shape, and API expectations:
-
-- [SVGO](https://github.com/svg/svgo): Node.js SVG optimizer and plugin
-  ecosystem.
-- [Scour](https://github.com/scour-project/scour): Python SVG optimizer and
-  cleaner.
-- [svgpathtools](https://github.com/mathandy/svgpathtools): Python path,
-  Bezier, geometry, length, and bounds utilities.
-- [svg.path](https://github.com/regebro/svg.path): Python SVG path parser and
-  path object model.
-- [svg-matrix-python](https://github.com/Emasoft/svg-matrix-python): Python
-  wrapper around SVG matrix conversion and validation workflows.
-- [Yqnn/svg-path-editor](https://github.com/Yqnn/svg-path-editor): SVG path
-  editing UI and path operation reference implementation.
-- [svg-path-commander](https://github.com/thednp/svg-path-commander):
-  TypeScript path parsing, normalization, geometry, and transformation tools.
-- [Iconify Tools](https://github.com/iconify/tools): TypeScript SVG import,
-  validation, cleanup, and export tooling.
-- [resvg/usvg](https://github.com/linebender/resvg): Rust SVG rendering and
-  static SVG simplification/reference implementation.
-- [VTracer](https://github.com/visioncortex/vtracer): Rust raster-to-vector
-  tracing tool.
-
-## Development
-
-This repository uses uv's native `uv_build` backend and has no required runtime
-dependencies.
-
-```bash
-uv run python -m unittest discover -s tests
-uv build
+```powershell
+target\debug\svgo.exe path --path "M10 10h5v5z" --op optimize:safe --minify
+target\debug\svgo.exe opt --input icon.svg --output icon.min.svg
+target\debug\svgo.exe trace --input icon.png --output traced.svg
+target\debug\svgo.exe center --path "M0 0L30 0L30 6L0 6Z" --emit d
 ```
-
-## Publishing
-
-PyPI publishing is handled by GitHub Actions Trusted Publishing through
-`.github/workflows/publish.yml`. The PyPI pending publisher must match this
-repository, the `publish.yml` workflow filename, and the `pypi` environment.
-
-To publish a release, update `project.version`, commit the change, and push a
-matching tag:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The workflow verifies that the pushed tag equals `v{project.version}`, runs the
-test suite, builds the wheel and source distribution with `uv`, then publishes
-to PyPI with Trusted Publishing.
-
-The package targets Python 3.11 and newer.

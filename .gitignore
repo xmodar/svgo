@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 dist/
 build/
+target/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/

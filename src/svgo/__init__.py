@@ -1,6 +1,6 @@
-"""Pure-Python SVG path editing, optimization, tracing, and centerline APIs."""
+"""Rust-backed SVG path editing, optimization, tracing, and centerline APIs."""
 
-from .centerline import centerline_path_data, centerline_svg_text
+from .centerline import CenterlineOptions, RasterContext, centerline_path_data, centerline_svg_text
 from .geometry import (
     circle_to_path,
     ellipse_to_path,
@@ -32,22 +32,28 @@ from .inspect_svg import (
 )
 from .measure import metrics_json, path_bbox, path_length, path_metrics, point_at_length, svg_metrics
 from .pathdata import PathData, parse_path, path_to_absolute, path_to_cubics, path_to_relative, path_to_string, transform_path
-from .raster_trace import trace_png
-from .svg_optimize import BUILTIN_PLUGINS, OptimizeOptions, optimize_svg
-from .vtracer_trace import trace_image_vtracer
+from .raster_trace import Image, TraceOptions, trace_image, trace_png
+from .svg_optimize import BUILTIN_PLUGINS, OptimizeOptions, PluginSpec, optimize_svg
+from .vtracer_trace import VTracerOptions, trace_image_vtracer
 from .viewport import fit_viewbox_svg, resize_svg, set_viewbox_svg
 
 __all__ = [
     "BUILTIN_PLUGINS",
+    "CenterlineOptions",
+    "Image",
     "OptimizeOptions",
     "PathData",
+    "PluginSpec",
+    "RasterContext",
+    "TraceOptions",
+    "VTracerOptions",
     "circle_to_path",
     "centerline_path_data",
     "centerline_svg_text",
     "convert_shapes_svg",
     "ellipse_to_path",
-    "flatten_svg",
     "fit_viewbox_svg",
+    "flatten_svg",
     "get_kappa",
     "get_precision",
     "get_svg_info",
@@ -78,11 +84,12 @@ __all__ = [
     "set_viewbox_svg",
     "svg_metrics",
     "to_plain_svg",
+    "trace_image",
+    "trace_image_vtracer",
+    "trace_png",
     "transform_2d",
     "transform_geometry_path",
     "transform_path",
-    "trace_image_vtracer",
-    "trace_png",
     "translate_2d",
     "validate_svg",
     "validate_svg_async",
