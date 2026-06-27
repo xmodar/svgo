@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 import re
 import sys
 from pathlib import Path
 
 from .centerline import CenterlineError, CenterlineOptions, build_output, centerline_path_data, centerline_svg_text, read_path_data
+from .inspect_svg import convert_shapes_svg, flatten_svg, get_svg_info, to_plain_svg, validate_svg
 from .pathdata import PathData, PathDataError
 from .raster_trace import RasterTraceError, TraceOptions, trace_png
 from .svg_optimize import BUILTIN_PLUGINS, OptimizeOptions, SvgOptimizeError, optimize_svg, parse_plugin_spec
@@ -102,6 +104,37 @@ def center_parser(prog: str = "svgo center") -> argparse.ArgumentParser:
     return parser
 
 
+def info_parser(prog: str = "svgo info") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog, description="Print structured SVG metadata and element counts.")
+    parser.add_argument("--input", "-i", required=True, help="Input SVG file.")
+    parser.add_argument("--output", "-o", help="Write JSON output to this file instead of stdout.")
+    parser.add_argument("--compact", action="store_true", help="Emit compact JSON.")
+    return parser
+
+
+def validate_parser(prog: str = "svgo validate") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog, description="Validate SVG XML and report structural issues.")
+    parser.add_argument("--input", "-i", required=True, help="Input SVG file.")
+    parser.add_argument("--output", "-o", help="Write validation report to this file instead of stdout.")
+    parser.add_argument("--strict", action="store_true", help="Treat warnings as invalid.")
+    parser.add_argument("--json", action="store_true", help="Emit JSON instead of a text report.")
+    parser.add_argument("--compact", action="store_true", help="Emit compact JSON with --json.")
+    return parser
+
+
+def convert_parser(prog: str = "svgo convert") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog, description="Convert SVG structure: plain cleanup, shape-to-path conversion, and transform flattening.")
+    parser.add_argument("--input", "-i", required=True, help="Input SVG file.")
+    parser.add_argument("--output", "-o", help="Write output SVG to this file instead of stdout.")
+    parser.add_argument("--precision", type=int, help="Numeric precision for generated path data.")
+    parser.add_argument("--to-plain", action="store_true", help="Remove editor metadata and editor-specific attributes.")
+    parser.add_argument("--shapes-to-paths", action="store_true", help="Convert rect/circle/ellipse/line/polyline/polygon to path elements.")
+    parser.add_argument("--flatten-transforms", action="store_true", help="Bake supported transforms into coordinates.")
+    parser.add_argument("--flatten-groups", action="store_true", help="Collapse empty unstyled groups.")
+    parser.add_argument("--all", action="store_true", help="Enable all conversion passes.")
+    return parser
+
+
 def build_main_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="svgo", description="Pure-Python SVG operations CLI.")
     sub = parser.add_subparsers(dest="command")
@@ -115,6 +148,12 @@ def build_main_parser() -> argparse.ArgumentParser:
     copy_arguments(trace_parser(), trace_sub)
     center_sub = sub.add_parser("center", aliases=["c"], help="Reconstruct centerline strokes.")
     copy_arguments(center_parser(), center_sub)
+    info_sub = sub.add_parser("info", aliases=["i"], help="Show SVG metadata and element counts.")
+    copy_arguments(info_parser(), info_sub)
+    validate_sub = sub.add_parser("validate", aliases=["v"], help="Validate SVG XML and report issues.")
+    copy_arguments(validate_parser(), validate_sub)
+    convert_sub = sub.add_parser("convert", aliases=["x"], help="Convert shapes, flatten transforms, or remove editor data.")
+    copy_arguments(convert_parser(), convert_sub)
     sub.add_parser("plugins", aliases=["l"], help="List built-in optimizer plugin names.")
     return parser
 
@@ -309,8 +348,59 @@ def run_centerline(args: argparse.Namespace) -> str:
     return build_output(d, args.emit, stroke_width, options, ctx)
 
 
+def run_info(args: argparse.Namespace) -> str:
+    info = get_svg_info(Path(args.input))
+    if "error" in info:
+        raise SvgOptimizeError(str(info["error"]))
+    return json.dumps(info, indent=None if args.compact else 2, sort_keys=True)
+
+
+def run_validate(args: argparse.Namespace) -> tuple[str, bool]:
+    result = validate_svg(Path(args.input), strict=args.strict)
+    if args.json:
+        return json.dumps(result, indent=None if args.compact else 2, sort_keys=True), bool(result["valid"])
+    return format_validation_result(result), bool(result["valid"])
+
+
+def run_convert(args: argparse.Namespace) -> str:
+    text = Path(args.input).read_text(encoding="utf-8")
+    explicit = args.to_plain or args.shapes_to_paths or args.flatten_transforms or args.flatten_groups or args.all
+    plain = args.to_plain or args.all
+    shapes_to_paths = args.shapes_to_paths or args.all or not explicit
+    flatten_transforms = args.flatten_transforms or args.all
+    flatten_groups = args.flatten_groups or args.all
+
+    if plain and not (shapes_to_paths or flatten_transforms or flatten_groups):
+        return to_plain_svg(text, precision=args.precision)
+    if shapes_to_paths and not (plain or flatten_transforms or flatten_groups):
+        return convert_shapes_svg(text, precision=args.precision)
+    return flatten_svg(
+        text,
+        precision=args.precision,
+        flatten_transforms=flatten_transforms,
+        flatten_groups=flatten_groups,
+        shapes_to_paths=shapes_to_paths,
+        plain=plain,
+    )
+
+
 def plugin_list_text() -> str:
     return "\n".join(f"{name}\t{'preset' if name == 'preset-default' else 'plugin'}" for name in BUILTIN_PLUGINS)
+
+
+def format_validation_result(result: dict[str, object]) -> str:
+    lines = ["valid" if result.get("valid") else "invalid"]
+    issues = result.get("issues")
+    if isinstance(issues, list):
+        for issue in issues:
+            if isinstance(issue, dict):
+                level = str(issue.get("level", "issue"))
+                reason = str(issue.get("reason", ""))
+                lines.append(f"{level}: {reason}")
+    error = result.get("error")
+    if error and not issues:
+        lines.append(f"error: {error}")
+    return "\n".join(lines)
 
 
 def escape_attr(value: str) -> str:
@@ -334,6 +424,16 @@ def handle_errors(prefix: str, fn, args: argparse.Namespace) -> int:
         return 1
 
 
+def handle_validate(args: argparse.Namespace) -> int:
+    try:
+        text, valid = run_validate(args)
+        write_or_print(text, getattr(args, "output", None))
+        return 0 if valid else 1
+    except OSError as exc:
+        print(f"svgo validate: {exc}", file=sys.stderr)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_main_parser()
     args = parser.parse_args(argv)
@@ -351,5 +451,11 @@ def main(argv: list[str] | None = None) -> int:
         return handle_errors("svgo trace", run_trace, args)
     if args.command in {"center", "c"}:
         return handle_errors("svgo center", run_centerline, args)
+    if args.command in {"info", "i"}:
+        return handle_errors("svgo info", run_info, args)
+    if args.command in {"validate", "v"}:
+        return handle_validate(args)
+    if args.command in {"convert", "x"}:
+        return handle_errors("svgo convert", run_convert, args)
     parser.print_help()
     return 1

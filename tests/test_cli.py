@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -42,6 +43,34 @@ class CliTests(unittest.TestCase):
         code, stdout, stderr = self.run_cli(["l"])
         self.assertEqual(code, 0, stderr)
         self.assertIn("convertPathData", stdout)
+
+    def test_info_alias_outputs_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            svg = Path(tmp) / "icon.svg"
+            svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="20"><rect width="1" height="2"/></svg>', encoding="utf-8")
+            code, stdout, stderr = self.run_cli(["i", "--input", str(svg), "--compact"])
+        self.assertEqual(code, 0, stderr)
+        info = json.loads(stdout)
+        self.assertEqual(info["width"], "10")
+        self.assertEqual(info["shapes"], 1)
+
+    def test_validate_alias_reports_strict_warning_as_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            svg = Path(tmp) / "icon.svg"
+            svg.write_text('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>', encoding="utf-8")
+            code, stdout, stderr = self.run_cli(["v", "--input", str(svg), "--strict"])
+        self.assertEqual(code, 1)
+        self.assertIn("warning:", stdout)
+        self.assertEqual(stderr, "")
+
+    def test_convert_alias_defaults_to_shapes_to_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            svg = Path(tmp) / "icon.svg"
+            svg.write_text('<svg xmlns="http://www.w3.org/2000/svg"><circle cx="5" cy="5" r="2"/></svg>', encoding="utf-8")
+            code, stdout, stderr = self.run_cli(["x", "--input", str(svg), "--precision", "2"])
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("<path", stdout)
+        self.assertNotIn("<circle", stdout)
 
     def test_removed_long_compatibility_names(self):
         code, _stdout, stderr = self.run_cli(["optimize", "--help"])

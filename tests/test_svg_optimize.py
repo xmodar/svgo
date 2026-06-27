@@ -22,6 +22,12 @@ class SvgOptimizeTests(unittest.TestCase):
         out = optimize_svg("<svg/>", OptimizeOptions(preset="none", datauri="enc"))
         self.assertTrue(out.startswith("data:image/svg+xml,"))
 
+    def test_single_pass_keeps_explicit_conversion_even_when_longer(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="5" cy="5" r="2"/></svg>'
+        out = optimize_svg(svg, OptimizeOptions(preset="none", plugins=[PluginSpec("convertShapeToPath")], float_precision=2))
+        self.assertIn("<path", out)
+        self.assertNotIn("<circle", out)
+
 
 if __name__ == "__main__":
     unittest.main()

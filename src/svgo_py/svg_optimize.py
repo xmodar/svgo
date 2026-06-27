@@ -194,12 +194,13 @@ def optimize_svg(svg_text: str, options: OptimizeOptions | None = None) -> str:
 
     passes = 10 if options.multipass else 1
     result = svg_text
-    for _ in range(passes):
+    for pass_index in range(passes):
         previous = result
-        result = optimize_once(result, options)
+        current = optimize_once(result, options)
+        if options.multipass and pass_index > 0 and len(current) >= len(previous):
+            break
+        result = current
         if not options.multipass or len(result) >= len(previous):
-            if len(result) >= len(previous):
-                result = previous if previous.strip() else result
             break
 
     if options.datauri:

@@ -1,8 +1,9 @@
 # svgo
 
 `svgo` is a pure-Python SVG toolchain for path editing, SVG optimization,
-PNG icon tracing, and centerline reconstruction. It ships as an importable
-Python package and as a single `svgo` command-line program.
+PNG icon tracing, centerline reconstruction, geometry conversion, matrix
+transforms, and SVG inspection. It ships as an importable Python package and
+as a single `svgo` command-line program.
 
 The package has no required runtime dependencies. If `numpy` is installed,
 some centerline distance-transform work can use accelerated array operations;
@@ -18,6 +19,11 @@ otherwise the standard-library fallback is used.
 - Trace simple PNG icons into filled SVG paths without shelling out to
   external tracing tools.
 - Convert filled stroke outlines into approximate stroked centerlines.
+- Convert SVG geometry primitives to path data and create common affine
+  matrices from Python.
+- Validate SVG XML, inspect dimensions/element counts/fonts, and run
+  structural conversions such as shape-to-path conversion, plain cleanup, and
+  transform flattening.
 - Use the same functionality from Python APIs or from the documented CLI.
 
 ## Installation
@@ -52,6 +58,9 @@ svgo path   --input icon.svg --output icon.out.svg --select all|N|N,N --op OP
 svgo opt    --input icon.svg --output icon.min.svg [optimization options] # alias: o
 svgo trace  --input icon.png --output traced.svg [trace options]          # alias: t
 svgo center --input outline.svg --output stroke.svg [centerline options]  # alias: c
+svgo info   --input icon.svg                                             # alias: i
+svgo validate --input icon.svg [--strict]                                # alias: v
+svgo convert --input icon.svg --output converted.svg [conversion options] # alias: x
 svgo plugins                                                             # alias: l
 ```
 
@@ -63,6 +72,9 @@ svgo path --help
 svgo opt --help
 svgo trace --help
 svgo center --help
+svgo info --help
+svgo validate --help
+svgo convert --help
 ```
 
 ## Path Editing
@@ -84,6 +96,7 @@ Supported operations:
 - `absolute`
 - `reverse` or `reverse:itemIndex`
 - `origin:itemIndex` or `origin:itemIndex:subpath`
+- `cubics`, `cubic`, `to-cubics`, or `toCubics`
 - `optimize:safe`, `optimize:size`, `optimize:closed`, `optimize:all`
 - `optimize:remove-useless,use-shorthands,use-hv,use-relative-absolute,use-reverse,use-close-path,remove-orphan-dots`
 
@@ -186,10 +199,59 @@ Important options:
 Centerline output is intentionally approximate. For production icon work,
 render and inspect the result before final minification.
 
+## Inspection And Conversion
+
+`svgo info` prints structured JSON metadata:
+
+```bash
+svgo info --input icon.svg
+svgo i --input icon.svg --compact
+```
+
+`svgo validate` checks SVG XML and reports structural issues. Warnings do not
+make the command fail unless `--strict` is used:
+
+```bash
+svgo validate --input icon.svg
+svgo v --input icon.svg --strict --json
+```
+
+`svgo convert` runs pure-Python structural conversions. With no conversion
+flags it converts basic shapes to paths:
+
+```bash
+svgo convert --input shapes.svg --output paths.svg
+svgo x --input drawing.svg --output plain.svg --to-plain
+svgo x --input transformed.svg --output flat.svg --shapes-to-paths --flatten-transforms
+svgo x --input source.svg --output converted.svg --all --precision 3
+```
+
+Conversion options:
+
+- `--to-plain`: remove common editor metadata and editor-specific attributes.
+- `--shapes-to-paths`: convert `rect`, `circle`, `ellipse`, `line`,
+  `polyline`, and `polygon` to `path`.
+- `--flatten-transforms`: bake supported transforms into path coordinates.
+- `--flatten-groups`: collapse empty unstyled groups.
+- `--all`: enable every conversion pass.
+- `--precision N`: control generated numeric precision.
+
 ## Python API
 
 ```python
-from svgo_py import PathData, centerline_path_data, optimize_svg, trace_png
+from svgo_py import (
+    PathData,
+    centerline_path_data,
+    circle_to_path,
+    get_svg_info,
+    optimize_svg,
+    path_to_cubics,
+    rect_to_path,
+    trace_png,
+    transform_2d,
+    translate_2d,
+    validate_svg,
+)
 
 path = PathData.parse("M0 0L10 0L10 10Z")
 path.transform((1, 0, 0, 1, 2, -1))
@@ -197,11 +259,17 @@ path.optimize("safe")
 print(path.to_string(decimals=3, minify=True))
 
 svg = optimize_svg("<svg><rect width='10' height='10'/></svg>")
+shape = rect_to_path(0, 0, 24, 12, rx=2, decimals=3, minify=True)
+cubic = path_to_cubics("M0 0L10 0Q15 0 15 5", decimals=3, minify=True)
+x, y = transform_2d(translate_2d(10, 5), 1, 2)
+report = validate_svg("<svg viewBox='0 0 10 10'/>")
 ```
 
 The lower-level modules are:
 
 - `svgo_py.pathdata`
+- `svgo_py.geometry`
+- `svgo_py.inspect_svg`
 - `svgo_py.svg_optimize`
 - `svgo_py.raster_trace`
 - `svgo_py.centerline`
