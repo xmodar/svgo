@@ -28,6 +28,13 @@ class SvgOptimizeTests(unittest.TestCase):
         self.assertIn("<path", out)
         self.assertNotIn("<circle", out)
 
+    def test_pysvgo_plugin_name_compatibility(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><defs><path d="M0 0"/><path id="keep" d="M1 1"/></defs></svg>'
+        out = optimize_svg(svg, OptimizeOptions(preset="none", plugins=[PluginSpec("removeScriptElement"), PluginSpec("removeUselessDefs")]))
+        self.assertNotIn("<script", out)
+        self.assertNotIn('d="M0 0"', out)
+        self.assertIn('id="keep"', out)
+
 
 if __name__ == "__main__":
     unittest.main()

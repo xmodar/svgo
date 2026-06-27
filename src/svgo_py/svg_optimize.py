@@ -59,6 +59,7 @@ DEFAULT_PRESET_PLUGINS = [
 EXTRA_PLUGINS = [
     "addAttributesToSVGElement",
     "addClassesToSVGElement",
+    "cleanupIDs",
     "cleanupListOfValues",
     "convertOneStopGradients",
     "convertStyleToAttrs",
@@ -69,6 +70,7 @@ EXTRA_PLUGINS = [
     "removeElementsByAttr",
     "removeOffCanvasPaths",
     "removeRasterImages",
+    "removeScriptElement",
     "removeScripts",
     "removeStyleElement",
     "removeTitle",
@@ -251,12 +253,13 @@ def apply_plugin(root: ET.Element, plugin: PluginSpec, options: OptimizeOptions)
         raise SvgOptimizeError(f"Unknown SVGO plugin: {name}")
     if name in {"removeDoctype", "removeXMLProcInst", "removeComments", "removeUnusedNS", "reusePaths", "preset-default"}:
         return
-    if name in {"removeMetadata", "removeDesc", "removeTitle", "removeScripts", "removeStyleElement", "removeRasterImages"}:
+    if name in {"removeMetadata", "removeDesc", "removeTitle", "removeScripts", "removeScriptElement", "removeStyleElement", "removeRasterImages"}:
         tags = {
             "removeMetadata": {"metadata"},
             "removeDesc": {"desc"},
             "removeTitle": {"title"},
             "removeScripts": {"script"},
+            "removeScriptElement": {"script"},
             "removeStyleElement": {"style"},
             "removeRasterImages": {"image"},
         }[name]
@@ -267,7 +270,7 @@ def apply_plugin(root: ET.Element, plugin: PluginSpec, options: OptimizeOptions)
         cleanup_attrs(root)
     elif name in {"mergeStyles", "minifyStyles", "inlineStyles"}:
         minify_styles(root)
-    elif name == "cleanupIds":
+    elif name in {"cleanupIds", "cleanupIDs"}:
         cleanup_ids(root)
     elif name == "removeUselessDefs":
         remove_empty_defs(root)
@@ -442,7 +445,13 @@ def remove_empty_defs(root: ET.Element) -> None:
         for element in list(root.iter()):
             if element is root:
                 continue
-            if local_name(element.tag) == "defs" and len(list(element)) == 0:
+            if local_name(element.tag) != "defs":
+                continue
+            for child in list(element):
+                if "id" not in child.attrib:
+                    element.remove(child)
+                    changed = True
+            if len(list(element)) == 0:
                 parents[element].remove(element)
                 changed = True
 
