@@ -15,6 +15,7 @@ from .measure import metrics_json, path_metrics, point_at_length, svg_metrics
 from .pathdata import PathData, PathDataError
 from .raster_trace import RasterTraceError, TraceOptions, trace_png
 from .svg_optimize import BUILTIN_PLUGINS, OptimizeOptions, SvgOptimizeError, optimize_svg, parse_plugin_spec
+from .viewport import fit_viewbox_svg, resize_svg, set_viewbox_svg
 
 
 def add_svgo_options(parser: argparse.ArgumentParser, include_flag: bool = True) -> None:
@@ -148,6 +149,21 @@ def sanitize_parser(prog: str = "svgo sanitize") -> argparse.ArgumentParser:
     return parser
 
 
+def viewbox_parser(prog: str = "svgo viewbox") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog, description="Set, fit, or resize the root SVG viewBox and dimensions.")
+    parser.add_argument("--input", "-i", required=True, help="Input SVG file.")
+    parser.add_argument("--output", "-o", help="Write output SVG to this file instead of stdout.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--set", dest="set_viewbox", help='Set viewBox to "min-x min-y width height".')
+    mode.add_argument("--fit-content", action="store_true", help="Fit viewBox to measured geometry bounds.")
+    parser.add_argument("--padding", type=float, default=0.0, help="Padding around measured bounds for --fit-content.")
+    parser.add_argument("--width", help="Set root width attribute.")
+    parser.add_argument("--height", help="Set root height attribute.")
+    parser.add_argument("--remove-dimensions", action="store_true", help="Remove root width and height after setting/fitting viewBox.")
+    parser.add_argument("--precision", type=int, help="Numeric precision for viewBox values.")
+    return parser
+
+
 def convert_parser(prog: str = "svgo convert") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog, description="Convert SVG structure: plain cleanup, shape-to-path conversion, and transform flattening.")
     parser.add_argument("--input", "-i", required=True, help="Input SVG file.")
@@ -184,6 +200,8 @@ def build_main_parser() -> argparse.ArgumentParser:
     copy_arguments(measure_parser(), measure_sub)
     sanitize_sub = sub.add_parser("sanitize", aliases=["s"], help="Remove active or unsafe SVG content.")
     copy_arguments(sanitize_parser(), sanitize_sub)
+    viewbox_sub = sub.add_parser("viewbox", aliases=["b"], help="Set, fit, or resize root SVG viewport data.")
+    copy_arguments(viewbox_parser(), viewbox_sub)
     convert_sub = sub.add_parser("convert", aliases=["x"], help="Convert shapes, flatten transforms, or remove editor data.")
     copy_arguments(convert_parser(), convert_sub)
     sub.add_parser("plugins", aliases=["l"], help="List built-in optimizer plugin names.")
@@ -442,6 +460,22 @@ def run_sanitize(args: argparse.Namespace) -> str:
     )
 
 
+def run_viewbox(args: argparse.Namespace) -> str:
+    text = Path(args.input).read_text(encoding="utf-8")
+    if args.fit_content:
+        text = fit_viewbox_svg(text, padding=args.padding, precision=args.precision, remove_dimensions=args.remove_dimensions)
+    elif args.set_viewbox:
+        text = set_viewbox_svg(text, args.set_viewbox, precision=args.precision, remove_dimensions=args.remove_dimensions)
+    elif args.remove_dimensions:
+        raise SvgOptimizeError("--remove-dimensions requires --set or --fit-content")
+
+    if args.width is not None or args.height is not None:
+        text = resize_svg(text, width=args.width, height=args.height)
+    if not (args.fit_content or args.set_viewbox or args.width is not None or args.height is not None):
+        raise SvgOptimizeError("Provide --set, --fit-content, --width, or --height")
+    return text
+
+
 def run_convert(args: argparse.Namespace) -> str:
     text = Path(args.input).read_text(encoding="utf-8")
     explicit = args.to_plain or args.shapes_to_paths or args.flatten_transforms or args.flatten_groups or args.inline_styles or args.sanitize or args.all
@@ -543,6 +577,8 @@ def main(argv: list[str] | None = None) -> int:
         return handle_errors("svgo measure", run_measure, args)
     if args.command in {"sanitize", "s"}:
         return handle_errors("svgo sanitize", run_sanitize, args)
+    if args.command in {"viewbox", "b"}:
+        return handle_errors("svgo viewbox", run_viewbox, args)
     if args.command in {"convert", "x"}:
         return handle_errors("svgo convert", run_convert, args)
     parser.print_help()

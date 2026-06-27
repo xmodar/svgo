@@ -2,8 +2,9 @@
 
 `svgo` is a pure-Python SVG toolchain for path editing, SVG optimization,
 PNG icon tracing, centerline reconstruction, geometry conversion, matrix
-transforms, measurement, sanitization, and SVG inspection. It ships as an
-importable Python package and as a single `svgo` command-line program.
+transforms, measurement, sanitization, viewBox/viewport edits, and SVG
+inspection. It ships as an importable Python package and as a single `svgo`
+command-line program.
 
 The package has no required runtime dependencies. If `numpy` is installed,
 some centerline distance-transform work can use accelerated array operations;
@@ -22,6 +23,7 @@ otherwise the standard-library fallback is used.
 - Convert SVG geometry primitives to path data and create common affine
   matrices from Python.
 - Measure path/SVG length, bounds, and point-at-length coordinates.
+- Set, fit, and resize root SVG `viewBox`, `width`, and `height` values.
 - Validate SVG XML, inspect dimensions/element counts/fonts, and run
   structural conversions such as shape-to-path conversion, plain cleanup,
   CSS style inlining, sanitization, and transform flattening.
@@ -63,6 +65,7 @@ svgo info   --input icon.svg                                             # alias
 svgo validate --input icon.svg [--strict]                                # alias: v
 svgo measure --input icon.svg                                            # alias: m
 svgo sanitize --input icon.svg --output safe.svg                         # alias: s
+svgo viewbox --input icon.svg --fit-content --output fitted.svg          # alias: b
 svgo convert --input icon.svg --output converted.svg [conversion options] # alias: x
 svgo plugins                                                             # alias: l
 ```
@@ -79,6 +82,7 @@ svgo info --help
 svgo validate --help
 svgo measure --help
 svgo sanitize --help
+svgo viewbox --help
 svgo convert --help
 ```
 
@@ -238,6 +242,14 @@ svgo sanitize --input icon.svg --output icon.safe.svg
 svgo s --input icon.svg --remove-external-refs --remove-styles
 ```
 
+`svgo viewbox` edits root viewport metadata:
+
+```bash
+svgo viewbox --input icon.svg --set "0 0 24 24" --remove-dimensions
+svgo b --input icon.svg --fit-content --padding 1 --precision 2
+svgo b --input icon.svg --width 48 --height 48
+```
+
 `svgo convert` runs pure-Python structural conversions. With no conversion
 flags it converts basic shapes to paths:
 
@@ -271,12 +283,15 @@ from svgo_py import (
     centerline_path_data,
     circle_to_path,
     get_svg_info,
+    fit_viewbox_svg,
     inline_styles_svg,
     optimize_svg,
     path_metrics,
     path_to_cubics,
     rect_to_path,
+    resize_svg,
     sanitize_svg,
+    set_viewbox_svg,
     trace_png,
     transform_2d,
     translate_2d,
@@ -295,6 +310,7 @@ x, y = transform_2d(translate_2d(10, 5), 1, 2)
 report = validate_svg("<svg viewBox='0 0 10 10'/>")
 metrics = path_metrics("M0 0H10V10H0Z", decimals=3)
 safe_svg = sanitize_svg("<svg onload='x()'><path d='M0 0H1'/></svg>")
+fitted_svg = fit_viewbox_svg("<svg><path d='M2 3H6V7H2Z'/></svg>")
 ```
 
 The lower-level modules are:
