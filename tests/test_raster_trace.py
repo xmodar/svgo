@@ -1,6 +1,6 @@
 import unittest
 
-from svgo_py.raster_trace import Image, TraceOptions, trace_image
+from svgo.raster_trace import Image, TraceOptions, trace_image
 
 
 class RasterTraceTests(unittest.TestCase):

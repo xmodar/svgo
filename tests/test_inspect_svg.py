@@ -1,6 +1,6 @@
 import unittest
 
-from svgo_py import convert_shapes_svg, flatten_svg, get_svg_info, inline_styles_svg, sanitize_svg, to_plain_svg, validate_svg
+from svgo import convert_shapes_svg, flatten_svg, get_svg_info, inline_styles_svg, sanitize_svg, to_plain_svg, validate_svg
 
 
 class InspectSvgTests(unittest.TestCase):

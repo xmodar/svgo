@@ -30,7 +30,7 @@ Repository = "https://github.com/xmodar/svgo"
 Issues = "https://github.com/xmodar/svgo/issues"
 
 [project.scripts]
-svgo = "svgo_py.cli:main"
+svgo = "svgo.cli:main"
 
 [tool.uv.build-backend]
-module-name = "svgo_py"
+module-name = "svgo"

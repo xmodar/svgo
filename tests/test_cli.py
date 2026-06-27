@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from svgo_py.cli import main
+from svgo.cli import main
 
 
 class CliTests(unittest.TestCase):

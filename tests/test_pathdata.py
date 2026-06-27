@@ -1,6 +1,6 @@
 import unittest
 
-from svgo_py.pathdata import PathData, parse_path, path_to_absolute, path_to_cubics, transform_path
+from svgo.pathdata import PathData, parse_path, path_to_absolute, path_to_cubics, transform_path
 
 
 class PathDataTests(unittest.TestCase):

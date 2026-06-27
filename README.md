@@ -278,7 +278,7 @@ Conversion options:
 ## Python API
 
 ```python
-from svgo_py import (
+from svgo import (
     PathData,
     centerline_path_data,
     circle_to_path,
@@ -315,14 +315,14 @@ fitted_svg = fit_viewbox_svg("<svg><path d='M2 3H6V7H2Z'/></svg>")
 
 The lower-level modules are:
 
-- `svgo_py.pathdata`
-- `svgo_py.geometry`
-- `svgo_py.measure`
-- `svgo_py.viewport`
-- `svgo_py.inspect_svg`
-- `svgo_py.svg_optimize`
-- `svgo_py.raster_trace`
-- `svgo_py.centerline`
+- `svgo.pathdata`
+- `svgo.geometry`
+- `svgo.measure`
+- `svgo.viewport`
+- `svgo.inspect_svg`
+- `svgo.svg_optimize`
+- `svgo.raster_trace`
+- `svgo.centerline`
 
 ## Reference Tools
 

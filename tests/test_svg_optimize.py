@@ -1,6 +1,6 @@
 import unittest
 
-from svgo_py.svg_optimize import OptimizeOptions, PluginSpec, optimize_svg
+from svgo.svg_optimize import OptimizeOptions, PluginSpec, optimize_svg
 
 
 class SvgOptimizeTests(unittest.TestCase):

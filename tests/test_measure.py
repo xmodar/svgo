@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from svgo_py import path_bbox, path_length, path_metrics, point_at_length, svg_metrics
-from svgo_py.cli import main
+from svgo import path_bbox, path_length, path_metrics, point_at_length, svg_metrics
+from svgo.cli import main
 
 
 class MeasureTests(unittest.TestCase):

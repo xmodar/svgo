@@ -1,6 +1,6 @@
 import unittest
 
-from svgo_py.centerline import CenterlineOptions, centerline_path_data
+from svgo.centerline import CenterlineOptions, centerline_path_data
 
 
 class CenterlineTests(unittest.TestCase):

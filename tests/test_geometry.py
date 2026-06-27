@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from svgo_py import circle_to_path, multiply_matrices, rect_to_path, rotate_2d, transform_2d, translate_2d
+from svgo import circle_to_path, multiply_matrices, rect_to_path, rotate_2d, transform_2d, translate_2d
 
 
 class GeometryTests(unittest.TestCase):

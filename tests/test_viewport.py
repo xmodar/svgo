@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from svgo_py import fit_viewbox_svg, resize_svg, set_viewbox_svg
-from svgo_py.cli import main
+from svgo import fit_viewbox_svg, resize_svg, set_viewbox_svg
+from svgo.cli import main
 
 
 class ViewportTests(unittest.TestCase):
