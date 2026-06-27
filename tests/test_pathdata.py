@@ -1,6 +1,6 @@
 import unittest
 
-from svgo_py.pathdata import PathData
+from svgo_py.pathdata import PathData, parse_path, path_to_absolute, path_to_cubics, transform_path
 
 
 class PathDataTests(unittest.TestCase):
@@ -28,6 +28,20 @@ class PathDataTests(unittest.TestCase):
         out = path.to_string(minify=True)
         self.assertTrue(out.startswith("M"))
         self.assertIn("Z", out)
+
+    def test_parse_path_exports_absolute_commands(self):
+        commands = parse_path("m1 1l2 3")
+        self.assertEqual(commands[0]["command"], "M")
+        self.assertEqual(commands[1]["args"], [3.0, 4.0])
+
+    def test_path_to_absolute_and_transform_path(self):
+        self.assertEqual(path_to_absolute("m1 1l2 3", minify=True), "M1 1L3 4")
+        self.assertEqual(transform_path("M0 0L1 1", (1, 0, 0, 1, 2, 3), minify=True), "M2 3L3 4")
+
+    def test_path_to_cubics_converts_lines_and_quadratics(self):
+        out = path_to_cubics("M0 0L3 0Q6 0 6 3Z", decimals=3, minify=True)
+        self.assertEqual(out.count("C"), 3)
+        self.assertTrue(out.endswith("Z"))
 
 
 if __name__ == "__main__":

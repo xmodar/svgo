@@ -1,7 +1,27 @@
 """Pure-Python SVG path editing, optimization, tracing, and centerline APIs."""
 
 from .centerline import centerline_path_data, centerline_svg_text
-from .pathdata import PathData
+from .geometry import (
+    circle_to_path,
+    ellipse_to_path,
+    get_kappa,
+    get_precision,
+    identity,
+    line_to_path,
+    matrix_to_3x3,
+    multiply_matrices,
+    polygon_to_path,
+    polyline_to_path,
+    rect_to_path,
+    rotate_2d,
+    scale_2d,
+    set_precision,
+    transform_2d,
+    transform_geometry_path,
+    translate_2d,
+)
+from .inspect_svg import convert_shapes_svg, flatten_svg, get_svg_info, to_plain_svg, validate_svg, validate_svg_async
+from .pathdata import PathData, parse_path, path_to_absolute, path_to_cubics, path_to_relative, path_to_string, transform_path
 from .raster_trace import trace_png
 from .svg_optimize import BUILTIN_PLUGINS, OptimizeOptions, optimize_svg
 
@@ -9,10 +29,39 @@ __all__ = [
     "BUILTIN_PLUGINS",
     "OptimizeOptions",
     "PathData",
+    "circle_to_path",
     "centerline_path_data",
     "centerline_svg_text",
+    "convert_shapes_svg",
+    "ellipse_to_path",
+    "flatten_svg",
+    "get_kappa",
+    "get_precision",
+    "get_svg_info",
+    "identity",
+    "line_to_path",
+    "matrix_to_3x3",
+    "multiply_matrices",
     "optimize_svg",
+    "parse_path",
+    "path_to_absolute",
+    "path_to_cubics",
+    "path_to_relative",
+    "path_to_string",
+    "polygon_to_path",
+    "polyline_to_path",
+    "rect_to_path",
+    "rotate_2d",
+    "scale_2d",
+    "set_precision",
+    "to_plain_svg",
+    "transform_2d",
+    "transform_geometry_path",
+    "transform_path",
     "trace_png",
+    "translate_2d",
+    "validate_svg",
+    "validate_svg_async",
 ]
 
 __version__ = "0.1.0b1"

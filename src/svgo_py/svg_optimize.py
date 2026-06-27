@@ -370,6 +370,12 @@ def remove_by_local_name(root: ET.Element, names: set[str]) -> None:
 
 def remove_editor_attrs(root: ET.Element) -> None:
     editor_namespaces = ("inkscape", "sodipodi", "sketch", "figma")
+    parents = parent_map(root)
+    for element in list(root.iter()):
+        if element is root:
+            continue
+        if any(ns in element.tag for ns in editor_namespaces):
+            parents[element].remove(element)
     for element in walk(root):
         for key in list(element.attrib):
             if any(ns in key for ns in editor_namespaces) or key.startswith("data-"):

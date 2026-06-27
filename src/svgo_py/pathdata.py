@@ -452,6 +452,12 @@ class PathData:
         self.segments = reindex_segments(recompute_starts(self.segments))
         return self
 
+    def to_cubics(self) -> "PathData":
+        """Convert drawable line, quadratic, and arc segments to cubic Beziers."""
+        self.segments = path_segments_to_cubics(self.segments)
+        self.relative = False
+        return self
+
     def to_string(self, decimals: int = 4, minify: bool = False) -> str:
         return serialize_path(self.segments, decimals, minify, self.relative, self.optimize_flags)
 
@@ -481,7 +487,144 @@ class PathData:
             return self.change_origin(parse_non_negative_int(parts[0], "origin itemIndex"), len(parts) > 1 and parts[1] == "subpath")
         if name == "optimize":
             return self.optimize(rest or "safe")
+        if name in {"cubics", "cubic", "to-cubics", "toCubics"}:
+            return self.to_cubics()
         raise PathDataError(f"Unknown operation: {name}")
+
+    def command_items(self) -> list[dict[str, object]]:
+        """Return parsed commands as dictionaries with absolute numeric args."""
+        return segments_to_command_items(self.segments)
+
+
+def parse_path(path_data: str) -> list[dict[str, object]]:
+    """Parse SVG path data into absolute command dictionaries."""
+    return PathData.parse(path_data).command_items()
+
+
+def path_to_string(commands: str | PathData | Sequence[dict[str, object]], decimals: int = 4, minify: bool = False) -> str:
+    """Serialize path data, a PathData object, or command dictionaries."""
+    if isinstance(commands, str):
+        return PathData.parse(commands).to_string(decimals, minify)
+    if isinstance(commands, PathData):
+        return commands.to_string(decimals, minify)
+    parts: list[str] = []
+    for item in commands:
+        command = str(item.get("command", ""))
+        args = item.get("args", [])
+        if not isinstance(args, Sequence) or isinstance(args, (str, bytes)):
+            raise PathDataError("command args must be a sequence of numbers")
+        parts.append(command_text(command, [float(value) for value in args], decimals, minify))
+    return PathData.parse(" ".join(parts)).to_string(decimals, minify)
+
+
+def path_to_absolute(path_data: str, decimals: int = 4, minify: bool = False) -> str:
+    """Serialize path data with absolute commands."""
+    return PathData.parse(path_data).set_relative(False).to_string(decimals, minify)
+
+
+def path_to_relative(path_data: str, decimals: int = 4, minify: bool = False) -> str:
+    """Serialize path data with relative commands."""
+    return PathData.parse(path_data).set_relative(True).to_string(decimals, minify)
+
+
+def path_to_cubics(path_data: str, decimals: int = 4, minify: bool = False) -> str:
+    """Convert drawable path segments to cubic Bezier commands."""
+    return PathData.parse(path_data).to_cubics().to_string(decimals, minify)
+
+
+def transform_path(path_data: str, matrix: Matrix | Sequence[float] | Sequence[Sequence[float]], decimals: int = 4, minify: bool = False) -> str:
+    """Apply an SVG affine matrix to path data and serialize the result."""
+    return PathData.parse(path_data).transform(coerce_matrix(matrix)).to_string(decimals, minify)
+
+
+def coerce_matrix(matrix: Matrix | Sequence[float] | Sequence[Sequence[float]]) -> Matrix:
+    """Coerce a 6-value SVG affine matrix or row-major 3x3 matrix."""
+    if len(matrix) == 6 and not isinstance(matrix[0], Sequence):  # type: ignore[index,arg-type]
+        return tuple(float(value) for value in matrix)  # type: ignore[arg-type,return-value]
+    if len(matrix) == 3 and all(isinstance(row, Sequence) and len(row) == 3 for row in matrix):  # type: ignore[arg-type]
+        rows = matrix  # type: ignore[assignment]
+        return (
+            float(rows[0][0]),
+            float(rows[1][0]),
+            float(rows[0][1]),
+            float(rows[1][1]),
+            float(rows[0][2]),
+            float(rows[1][2]),
+        )
+    raise PathDataError("matrix must be a 6-value SVG affine tuple or row-major 3x3 matrix")
+
+
+def segments_to_command_items(segments: list[Segment]) -> list[dict[str, object]]:
+    items: list[dict[str, object]] = []
+    for segment in recompute_starts(segments):
+        args: list[float | int]
+        if segment.cmd == "M":
+            args = [segment.end.x, segment.end.y]
+        elif segment.cmd == "L":
+            args = [segment.end.x, segment.end.y]
+        elif segment.cmd == "C":
+            c1, c2 = segment.values
+            assert isinstance(c1, Point) and isinstance(c2, Point)
+            args = [c1.x, c1.y, c2.x, c2.y, segment.end.x, segment.end.y]
+        elif segment.cmd == "Q":
+            (c,) = segment.values
+            assert isinstance(c, Point)
+            args = [c.x, c.y, segment.end.x, segment.end.y]
+        elif segment.cmd == "A":
+            rx, ry, rotation, large_arc, sweep = segment.values
+            args = [float(rx), float(ry), float(rotation), int(large_arc), int(sweep), segment.end.x, segment.end.y]
+        elif segment.cmd == "Z":
+            args = []
+        else:
+            raise PathDataError(f"Unsupported segment for command export: {segment.cmd}")
+        items.append({"command": segment.cmd, "args": args})
+    return items
+
+
+def path_segments_to_cubics(segments: list[Segment]) -> list[Segment]:
+    result: list[Segment] = []
+    current = Point(0.0, 0.0)
+    subpath_start = Point(0.0, 0.0)
+    for segment in recompute_starts(segments):
+        if segment.cmd == "M":
+            current = segment.end
+            subpath_start = segment.end
+            result.append(Segment("M", current, current, (), segment.index))
+        elif segment.cmd == "L":
+            result.append(line_to_cubic_segment(segment.start, segment.end, segment.index))
+            current = segment.end
+        elif segment.cmd == "C":
+            result.append(segment)
+            current = segment.end
+        elif segment.cmd == "Q":
+            (ctrl,) = segment.values
+            assert isinstance(ctrl, Point)
+            result.append(quadratic_to_cubic_segment(segment.start, ctrl, segment.end, segment.index))
+            current = segment.end
+        elif segment.cmd == "A":
+            cubics = arc_to_cubic_segments(segment)
+            result.extend(cubics)
+            current = cubics[-1].end if cubics else segment.end
+        elif segment.cmd == "Z":
+            if not current.close_to(subpath_start):
+                result.append(line_to_cubic_segment(current, subpath_start, segment.index))
+            result.append(Segment("Z", subpath_start, subpath_start, (), segment.index))
+            current = subpath_start
+        else:
+            raise PathDataError(f"Unsupported segment for cubic conversion: {segment.cmd}")
+    return reindex_segments(recompute_starts(result))
+
+
+def line_to_cubic_segment(start: Point, end: Point, index: int = 0) -> Segment:
+    c1 = Point(start.x + (end.x - start.x) / 3.0, start.y + (end.y - start.y) / 3.0)
+    c2 = Point(start.x + 2.0 * (end.x - start.x) / 3.0, start.y + 2.0 * (end.y - start.y) / 3.0)
+    return Segment("C", start, end, (c1, c2), index)
+
+
+def quadratic_to_cubic_segment(start: Point, ctrl: Point, end: Point, index: int = 0) -> Segment:
+    c1 = Point(start.x + 2.0 * (ctrl.x - start.x) / 3.0, start.y + 2.0 * (ctrl.y - start.y) / 3.0)
+    c2 = Point(end.x + 2.0 * (ctrl.x - end.x) / 3.0, end.y + 2.0 * (ctrl.y - end.y) / 3.0)
+    return Segment("C", start, end, (c1, c2), index)
 
 
 def split_operation(operation: str) -> tuple[str, str]:
