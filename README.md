@@ -60,6 +60,7 @@ svgo path   --path "<d>" [--op OP ...] [--svgo]                         # alias:
 svgo path   --input icon.svg --output icon.out.svg --select all|N|N,N --op OP
 svgo opt    --input icon.svg --output icon.min.svg [optimization options] # alias: o
 svgo trace  --input icon.png --output traced.svg [trace options]          # alias: t
+svgo trace2 --input icon.png --output traced.svg [VTracer options]        # alias: t2
 svgo center --input outline.svg --output stroke.svg [centerline options]  # alias: c
 svgo info   --input icon.svg                                             # alias: i
 svgo validate --input icon.svg [--strict]                                # alias: v
@@ -77,6 +78,7 @@ svgo --help
 svgo path --help
 svgo opt --help
 svgo trace --help
+svgo trace2 --help
 svgo center --help
 svgo info --help
 svgo validate --help
@@ -151,12 +153,12 @@ execute Node.js.
 
 ## PNG Tracing
 
-PNG tracing decodes non-interlaced 8-bit PNGs with the standard library,
-groups visible pixels, traces connected-component boundaries, and writes
-filled SVG paths.
+PNG tracing has two modes. `trace` is the dependency-free pixel tracer: it
+decodes non-interlaced 8-bit PNGs with the standard library, groups visible
+pixels, traces connected-component boundaries, and writes filled SVG paths.
 
 ```bash
-svgo trace --input icon.png --output traced.svg --mode palette --max-colors 8 --quantize 24 --min-area 8
+svgo trace --input icon.png --output traced.svg --mode palette --curve-mode pixel --max-colors 8 --quantize 24 --min-area 8
 ```
 
 Modes:
@@ -167,6 +169,8 @@ Modes:
 
 Useful options:
 
+- `--curve-mode pixel|exact`: keep exact per-pixel boundaries. This preserves
+  the original tracer behavior.
 - `--drop-white`
 - `--alpha-threshold N`
 - `--white-threshold N`
@@ -176,6 +180,31 @@ Useful options:
 - `--scale N`
 - `--decimals N`
 - `--title TEXT`
+
+For higher-quality curve fitting, use `trace2`/`t2`. It calls the real
+[VTracer](https://github.com/visioncortex/vtracer) Python package when
+installed, or a `vtracer` CLI on `PATH`. The default values match VTracer's
+web-app defaults and the FreeConvert-style controls:
+
+```bash
+svgo trace2 --input icon.png --output traced.svg
+uv run --with vtracer svgo trace2 --input icon.png --output traced.svg
+svgo t2 --input icon.png --output traced.svg --curve-mode spline --filter-speckle 4 --color-precision 6 --gradient-step 16
+```
+
+VTracer options:
+
+- `--color-mode color|binary`
+- `--hierarchical stacked|cutout` or `--clustering stacked|cutout`
+- `--color-precision N`
+- `--gradient-step N`
+- `--filter-speckle N`
+- `--curve-mode pixel|polygon|spline`
+- `--corner-threshold N`
+- `--segment-length N`
+- `--max-iterations N`
+- `--splice-threshold N`
+- `--path-precision N`
 
 ## Centerline Reconstruction
 
@@ -370,8 +399,8 @@ To publish a release, update `project.version`, commit the change, and push a
 matching tag:
 
 ```bash
-git tag v0.1.0b2
-git push origin v0.1.0b2
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 The workflow verifies that the pushed tag equals `v{project.version}`, runs the

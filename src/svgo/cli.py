@@ -15,6 +15,7 @@ from .measure import metrics_json, path_metrics, point_at_length, svg_metrics
 from .pathdata import PathData, PathDataError
 from .raster_trace import RasterTraceError, TraceOptions, trace_png
 from .svg_optimize import BUILTIN_PLUGINS, OptimizeOptions, SvgOptimizeError, optimize_svg, parse_plugin_spec
+from .vtracer_trace import VTracerOptions, VTracerTraceError, trace_image_vtracer
 from .viewport import fit_viewbox_svg, resize_svg, set_viewbox_svg
 
 
@@ -70,6 +71,7 @@ def trace_parser(prog: str = "svgo trace") -> argparse.ArgumentParser:
     parser.add_argument("--input", "-i", required=True, help="Input PNG file.")
     parser.add_argument("--output", "-o", help="Write SVG output to this file instead of stdout.")
     parser.add_argument("--mode", choices=("palette", "alpha", "exact"), default="palette", help="Tracing mode.")
+    parser.add_argument("--curve-mode", choices=("pixel", "exact"), default="pixel", help="Curve mode for the pure-Python tracer; pixel and exact keep per-pixel boundaries.")
     parser.add_argument("--alpha-threshold", type=int, default=16, help="Minimum alpha to include a pixel.")
     parser.add_argument("--white-threshold", type=int, default=250, help="RGB threshold for --drop-white.")
     parser.add_argument("--drop-white", action="store_true", help="Treat near-white pixels as background.")
@@ -79,6 +81,24 @@ def trace_parser(prog: str = "svgo trace") -> argparse.ArgumentParser:
     parser.add_argument("--scale", type=float, default=1.0, help="Scale output coordinates.")
     parser.add_argument("--decimals", type=int, default=3, help="Decimal places for coordinates.")
     parser.add_argument("--title", help="Optional SVG title.")
+    return parser
+
+
+def trace2_parser(prog: str = "svgo trace2") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog, description="Trace a raster image with VTracer into high-quality SVG paths.")
+    parser.add_argument("--input", "-i", required=True, help="Input raster image file.")
+    parser.add_argument("--output", "-o", help="Write SVG output to this file instead of stdout.")
+    parser.add_argument("--color-mode", choices=("color", "binary"), default="color", help="VTracer color mode.")
+    parser.add_argument("--hierarchical", "--clustering", choices=("stacked", "cutout"), default="stacked", help="VTracer layer clustering mode.")
+    parser.add_argument("--color-precision", type=int, default=6, help="Number of significant bits in each RGB channel.")
+    parser.add_argument("--gradient-step", type=int, default=16, help="Color difference between gradient layers.")
+    parser.add_argument("--filter-speckle", type=int, default=4, help="Discard patches smaller than this many pixels.")
+    parser.add_argument("--curve-mode", choices=("pixel", "polygon", "spline"), default="spline", help="VTracer curve fitting mode.")
+    parser.add_argument("--corner-threshold", type=int, default=60, help="Minimum angle treated as a corner.")
+    parser.add_argument("--segment-length", type=float, default=4.0, help="Minimum segment length before subdivision.")
+    parser.add_argument("--max-iterations", type=int, default=10, help="Maximum smoothing iterations.")
+    parser.add_argument("--splice-threshold", type=int, default=45, help="Minimum angle displacement for splicing curves.")
+    parser.add_argument("--path-precision", type=int, default=8, help="Decimal precision for generated path data.")
     return parser
 
 
@@ -190,6 +210,8 @@ def build_main_parser() -> argparse.ArgumentParser:
     add_svgo_options(opt_sub, include_flag=False)
     trace_sub = sub.add_parser("trace", aliases=["t"], help="Trace a PNG into SVG.")
     copy_arguments(trace_parser(), trace_sub)
+    trace2_sub = sub.add_parser("trace2", aliases=["t2"], help="Trace a raster image with VTracer.")
+    copy_arguments(trace2_parser(), trace2_sub)
     center_sub = sub.add_parser("center", aliases=["c"], help="Reconstruct centerline strokes.")
     copy_arguments(center_parser(), center_sub)
     info_sub = sub.add_parser("info", aliases=["i"], help="Show SVG metadata and element counts.")
@@ -352,6 +374,7 @@ def run_optimize(args: argparse.Namespace) -> str:
 def run_trace(args: argparse.Namespace) -> str:
     options = TraceOptions(
         mode=args.mode,
+        curve_mode=args.curve_mode,
         alpha_threshold=args.alpha_threshold,
         white_threshold=args.white_threshold,
         drop_white=args.drop_white,
@@ -363,6 +386,23 @@ def run_trace(args: argparse.Namespace) -> str:
         title=args.title,
     )
     return trace_png(args.input, options)
+
+
+def run_trace2(args: argparse.Namespace) -> str:
+    options = VTracerOptions(
+        color_mode=args.color_mode,
+        hierarchical=args.hierarchical,
+        color_precision=args.color_precision,
+        gradient_step=args.gradient_step,
+        filter_speckle=args.filter_speckle,
+        curve_mode=args.curve_mode,
+        corner_threshold=args.corner_threshold,
+        segment_length=args.segment_length,
+        max_iterations=args.max_iterations,
+        splice_threshold=args.splice_threshold,
+        path_precision=args.path_precision,
+    )
+    return trace_image_vtracer(args.input, options)
 
 
 def centerline_options(args: argparse.Namespace) -> CenterlineOptions:
@@ -538,7 +578,7 @@ def handle_errors(prefix: str, fn, args: argparse.Namespace) -> int:
         text = fn(args)
         write_or_print(text, getattr(args, "output", None))
         return 0
-    except (PathDataError, RasterTraceError, CenterlineError, SvgOptimizeError, OSError) as exc:
+    except (PathDataError, RasterTraceError, VTracerTraceError, CenterlineError, SvgOptimizeError, OSError) as exc:
         print(f"{prefix}: {exc}", file=sys.stderr)
         return 1
 
@@ -568,6 +608,8 @@ def main(argv: list[str] | None = None) -> int:
         return handle_errors("svgo opt", run_optimize, args)
     if args.command in {"trace", "t"}:
         return handle_errors("svgo trace", run_trace, args)
+    if args.command in {"trace2", "t2"}:
+        return handle_errors("svgo trace2", run_trace2, args)
     if args.command in {"center", "c"}:
         return handle_errors("svgo center", run_centerline, args)
     if args.command in {"info", "i"}:

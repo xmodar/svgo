@@ -34,6 +34,7 @@ class TraceOptions:
     scale: float = 1.0
     decimals: int = 3
     title: str | None = None
+    curve_mode: str = "pixel"
 
 
 def paeth(left: int, up: int, up_left: int) -> int:
@@ -309,6 +310,8 @@ def build_svg(image: Image, groups: dict[tuple[int, int, int], set[tuple[int, in
 
 def trace_image(image: Image, options: TraceOptions | None = None) -> str:
     options = options or TraceOptions()
+    if options.curve_mode not in {"pixel", "exact"}:
+        raise RasterTraceError("--curve-mode must be pixel or exact for svgo trace; use svgo trace2 for VTracer curve fitting")
     if options.alpha_threshold < 0 or options.alpha_threshold > 255:
         raise RasterTraceError("--alpha-threshold must be between 0 and 255")
     if options.max_colors < 1:

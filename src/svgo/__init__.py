@@ -34,6 +34,7 @@ from .measure import metrics_json, path_bbox, path_length, path_metrics, point_a
 from .pathdata import PathData, parse_path, path_to_absolute, path_to_cubics, path_to_relative, path_to_string, transform_path
 from .raster_trace import trace_png
 from .svg_optimize import BUILTIN_PLUGINS, OptimizeOptions, optimize_svg
+from .vtracer_trace import trace_image_vtracer
 from .viewport import fit_viewbox_svg, resize_svg, set_viewbox_svg
 
 __all__ = [
@@ -80,10 +81,11 @@ __all__ = [
     "transform_2d",
     "transform_geometry_path",
     "transform_path",
+    "trace_image_vtracer",
     "trace_png",
     "translate_2d",
     "validate_svg",
     "validate_svg_async",
 ]
 
-__version__ = "0.1.0b2"
+__version__ = "0.1.0"

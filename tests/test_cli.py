@@ -1,7 +1,9 @@
 import contextlib
 import io
 import json
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -43,6 +45,36 @@ class CliTests(unittest.TestCase):
         code, stdout, stderr = self.run_cli(["l"])
         self.assertEqual(code, 0, stderr)
         self.assertIn("convertPathData", stdout)
+
+    def test_trace2_alias_uses_vtracer_defaults(self):
+        calls = []
+        fake = types.SimpleNamespace()
+
+        def convert_raw_image_to_svg(data, **kwargs):
+            calls.append((data, kwargs))
+            return '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>'
+
+        fake.convert_raw_image_to_svg = convert_raw_image_to_svg
+        old = sys.modules.get("vtracer")
+        sys.modules["vtracer"] = fake
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                image = Path(tmp) / "icon.png"
+                image.write_bytes(b"\x89PNG\r\n\x1a\n")
+                code, stdout, stderr = self.run_cli(["t2", "--input", str(image)])
+        finally:
+            if old is None:
+                sys.modules.pop("vtracer", None)
+            else:
+                sys.modules["vtracer"] = old
+
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("<svg", stdout)
+        self.assertEqual(calls[0][1]["img_format"], "png")
+        self.assertEqual(calls[0][1]["mode"], "spline")
+        self.assertEqual(calls[0][1]["filter_speckle"], 4)
+        self.assertEqual(calls[0][1]["color_precision"], 6)
+        self.assertEqual(calls[0][1]["layer_difference"], 16)
 
     def test_info_alias_outputs_json(self):
         with tempfile.TemporaryDirectory() as tmp:
