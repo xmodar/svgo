@@ -1,6 +1,6 @@
 import unittest
 
-from svgo_py import convert_shapes_svg, flatten_svg, get_svg_info, to_plain_svg, validate_svg
+from svgo_py import convert_shapes_svg, flatten_svg, get_svg_info, inline_styles_svg, sanitize_svg, to_plain_svg, validate_svg
 
 
 class InspectSvgTests(unittest.TestCase):
@@ -36,6 +36,39 @@ class InspectSvgTests(unittest.TestCase):
         flattened = flatten_svg(svg, precision=2)
         self.assertIn("<path", flattened)
         self.assertNotIn("transform=", flattened)
+
+    def test_flatten_svg_bakes_group_transform(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg"><g transform="translate(5 2)"><path d="M0 0H10"/></g></svg>'
+        flattened = flatten_svg(svg, precision=2, shapes_to_paths=False, flatten_groups=True)
+        self.assertIn('d="M5 2L15 2"', flattened)
+        self.assertNotIn("transform=", flattened)
+
+    def test_validate_svg_flags_active_content(self):
+        result = validate_svg('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(1)</script></svg>')
+        self.assertFalse(result["valid"])
+        reasons = " ".join(issue["reason"] for issue in result["issues"])
+        self.assertIn("<script>", reasons)
+        self.assertIn("Event handler", reasons)
+
+    def test_sanitize_svg_removes_active_content(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><a href="javascript:alert(1)"><script>x()</script><path d="M0 0H1"/></a></svg>'
+        out = sanitize_svg(svg)
+        self.assertNotIn("script", out)
+        self.assertNotIn("onload", out)
+        self.assertNotIn("javascript:", out)
+        self.assertIn("<path", out)
+
+    def test_inline_styles_svg_moves_simple_rules_to_attrs(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg"><style>.hot{fill:red;stroke:#000}</style><path class="hot" d="M0 0H1"/></svg>'
+        out = inline_styles_svg(svg)
+        self.assertNotIn("<style", out)
+        self.assertIn('fill="red"', out)
+        self.assertIn('stroke="#000"', out)
+
+    def test_inline_styles_svg_preserves_later_rule_order(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg"><style>.hot{fill:red}.hot{fill:blue}</style><path class="hot" d="M0 0H1"/></svg>'
+        out = inline_styles_svg(svg)
+        self.assertIn('fill="blue"', out)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,8 @@ import sys
 from pathlib import Path
 
 from .centerline import CenterlineError, CenterlineOptions, build_output, centerline_path_data, centerline_svg_text, read_path_data
-from .inspect_svg import convert_shapes_svg, flatten_svg, get_svg_info, to_plain_svg, validate_svg
+from .inspect_svg import convert_shapes_svg, flatten_svg, get_svg_info, inline_styles_svg, sanitize_svg, to_plain_svg, validate_svg
+from .measure import metrics_json, path_metrics, point_at_length, svg_metrics
 from .pathdata import PathData, PathDataError
 from .raster_trace import RasterTraceError, TraceOptions, trace_png
 from .svg_optimize import BUILTIN_PLUGINS, OptimizeOptions, SvgOptimizeError, optimize_svg, parse_plugin_spec
@@ -122,6 +123,31 @@ def validate_parser(prog: str = "svgo validate") -> argparse.ArgumentParser:
     return parser
 
 
+def measure_parser(prog: str = "svgo measure") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog, description="Measure SVG path length, bounds, and point-at-length data.")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--path", help="Raw SVG path d data.")
+    source.add_argument("--input", "-i", help="Input SVG file or text file containing path data.")
+    parser.add_argument("--output", "-o", help="Write JSON output to this file instead of stdout.")
+    parser.add_argument("--at", type=float, help="Return point coordinates at this distance along a single path.")
+    parser.add_argument("--decimals", type=int, help="Round numeric output to this many decimals.")
+    parser.add_argument("--error", type=float, default=0.01, help="Maximum cubic-length approximation error.")
+    parser.add_argument("--compact", action="store_true", help="Emit compact JSON.")
+    return parser
+
+
+def sanitize_parser(prog: str = "svgo sanitize") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog, description="Remove scripts, event handlers, and unsafe links from SVG input.")
+    parser.add_argument("--input", "-i", required=True, help="Input SVG file.")
+    parser.add_argument("--output", "-o", help="Write output SVG to this file instead of stdout.")
+    parser.add_argument("--precision", type=int, help="Numeric precision for generated values.")
+    parser.add_argument("--remove-external-refs", action="store_true", help="Remove http(s), protocol-relative, and external CSS URL references.")
+    parser.add_argument("--disallow-data-images", action="store_true", help="Remove data: image references as unsafe links.")
+    parser.add_argument("--remove-styles", action="store_true", help="Remove style elements and style attributes.")
+    parser.add_argument("--remove-raster-images", action="store_true", help="Remove image elements.")
+    return parser
+
+
 def convert_parser(prog: str = "svgo convert") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog, description="Convert SVG structure: plain cleanup, shape-to-path conversion, and transform flattening.")
     parser.add_argument("--input", "-i", required=True, help="Input SVG file.")
@@ -131,6 +157,8 @@ def convert_parser(prog: str = "svgo convert") -> argparse.ArgumentParser:
     parser.add_argument("--shapes-to-paths", action="store_true", help="Convert rect/circle/ellipse/line/polyline/polygon to path elements.")
     parser.add_argument("--flatten-transforms", action="store_true", help="Bake supported transforms into coordinates.")
     parser.add_argument("--flatten-groups", action="store_true", help="Collapse empty unstyled groups.")
+    parser.add_argument("--inline-styles", action="store_true", help="Inline simple style-element rules into presentation attributes.")
+    parser.add_argument("--sanitize", action="store_true", help="Remove scripts, event handlers, and unsafe links before conversion.")
     parser.add_argument("--all", action="store_true", help="Enable all conversion passes.")
     return parser
 
@@ -152,6 +180,10 @@ def build_main_parser() -> argparse.ArgumentParser:
     copy_arguments(info_parser(), info_sub)
     validate_sub = sub.add_parser("validate", aliases=["v"], help="Validate SVG XML and report issues.")
     copy_arguments(validate_parser(), validate_sub)
+    measure_sub = sub.add_parser("measure", aliases=["m"], help="Measure path/SVG bounds and lengths.")
+    copy_arguments(measure_parser(), measure_sub)
+    sanitize_sub = sub.add_parser("sanitize", aliases=["s"], help="Remove active or unsafe SVG content.")
+    copy_arguments(sanitize_parser(), sanitize_sub)
     convert_sub = sub.add_parser("convert", aliases=["x"], help="Convert shapes, flatten transforms, or remove editor data.")
     copy_arguments(convert_parser(), convert_sub)
     sub.add_parser("plugins", aliases=["l"], help="List built-in optimizer plugin names.")
@@ -362,13 +394,65 @@ def run_validate(args: argparse.Namespace) -> tuple[str, bool]:
     return format_validation_result(result), bool(result["valid"])
 
 
+def run_measure(args: argparse.Namespace) -> str:
+    error = max(float(args.error), 1e-9)
+    if args.path:
+        result = path_metrics(args.path, decimals=args.decimals, error=error)
+        if args.at is not None:
+            point = point_at_length(args.path, args.at, error=error)
+            if args.decimals is not None:
+                point = {key: round(value, args.decimals) for key, value in point.items()}
+            result["point"] = point
+        return metrics_json(result, compact=args.compact)
+
+    text = Path(args.input).read_text(encoding="utf-8")
+    if re.search(r"<path\b|<svg\b|<rect\b|<circle\b|<ellipse\b|<line\b|<polyline\b|<polygon\b", text, flags=re.I):
+        result = svg_metrics(text, decimals=args.decimals, error=error)
+        if args.at is not None:
+            paths = result.get("paths")
+            if not isinstance(paths, list) or len(paths) != 1:
+                raise SvgOptimizeError("--at requires raw path input or an SVG with exactly one measurable path")
+            d = paths[0].get("d")
+            if not isinstance(d, str) or not d:
+                raise SvgOptimizeError("--at could not read the measured path data")
+            point = point_at_length(d, args.at, error=error)
+            if args.decimals is not None:
+                point = {key: round(value, args.decimals) for key, value in point.items()}
+            result["point"] = point
+        return metrics_json(result, compact=args.compact)
+
+    result = path_metrics(text.strip(), decimals=args.decimals, error=error)
+    if args.at is not None:
+        point = point_at_length(text.strip(), args.at, error=error)
+        if args.decimals is not None:
+            point = {key: round(value, args.decimals) for key, value in point.items()}
+        result["point"] = point
+    return metrics_json(result, compact=args.compact)
+
+
+def run_sanitize(args: argparse.Namespace) -> str:
+    text = Path(args.input).read_text(encoding="utf-8")
+    return sanitize_svg(
+        text,
+        precision=args.precision,
+        remove_external_refs=args.remove_external_refs,
+        allow_data_images=not args.disallow_data_images,
+        remove_styles=args.remove_styles,
+        remove_raster_images=args.remove_raster_images,
+    )
+
+
 def run_convert(args: argparse.Namespace) -> str:
     text = Path(args.input).read_text(encoding="utf-8")
-    explicit = args.to_plain or args.shapes_to_paths or args.flatten_transforms or args.flatten_groups or args.all
+    explicit = args.to_plain or args.shapes_to_paths or args.flatten_transforms or args.flatten_groups or args.inline_styles or args.sanitize or args.all
     plain = args.to_plain or args.all
     shapes_to_paths = args.shapes_to_paths or args.all or not explicit
     flatten_transforms = args.flatten_transforms or args.all
     flatten_groups = args.flatten_groups or args.all
+    if args.sanitize or args.all:
+        text = sanitize_svg(text, precision=args.precision)
+    if args.inline_styles or args.all:
+        text = inline_styles_svg(text, precision=args.precision)
 
     if plain and not (shapes_to_paths or flatten_transforms or flatten_groups):
         return to_plain_svg(text, precision=args.precision)
@@ -455,6 +539,10 @@ def main(argv: list[str] | None = None) -> int:
         return handle_errors("svgo info", run_info, args)
     if args.command in {"validate", "v"}:
         return handle_validate(args)
+    if args.command in {"measure", "m"}:
+        return handle_errors("svgo measure", run_measure, args)
+    if args.command in {"sanitize", "s"}:
+        return handle_errors("svgo sanitize", run_sanitize, args)
     if args.command in {"convert", "x"}:
         return handle_errors("svgo convert", run_convert, args)
     parser.print_help()

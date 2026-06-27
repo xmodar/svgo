@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .pathdata import PathData, PathDataError, fmt_number, parse_transform
+from .pathdata import PathData, PathDataError, fmt_number, matrix_multiply, parse_transform
 
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
@@ -72,8 +72,10 @@ EXTRA_PLUGINS = [
     "removeRasterImages",
     "removeScriptElement",
     "removeScripts",
+    "removeEventAttributes",
     "removeStyleElement",
     "removeTitle",
+    "removeUnsafeLinks",
     "removeViewBox",
     "removeXlink",
     "removeXMLNS",
@@ -268,7 +270,10 @@ def apply_plugin(root: ET.Element, plugin: PluginSpec, options: OptimizeOptions)
         remove_editor_attrs(root)
     elif name == "cleanupAttrs":
         cleanup_attrs(root)
-    elif name in {"mergeStyles", "minifyStyles", "inlineStyles"}:
+    elif name in {"mergeStyles", "minifyStyles"}:
+        minify_styles(root)
+    elif name == "inlineStyles":
+        inline_style_elements(root, remove_style_elements=bool(params.get("removeStyleElement", False)))
         minify_styles(root)
     elif name in {"cleanupIds", "cleanupIDs"}:
         cleanup_ids(root)
@@ -335,6 +340,14 @@ def apply_plugin(root: ET.Element, plugin: PluginSpec, options: OptimizeOptions)
         remove_elements_by_attr(root, params)
     elif name == "removeOffCanvasPaths":
         return
+    elif name == "removeEventAttributes":
+        remove_event_attrs(root)
+    elif name == "removeUnsafeLinks":
+        remove_unsafe_links(
+            root,
+            remove_external=bool(params.get("removeExternal", False)),
+            allow_data_images=bool(params.get("allowDataImages", True)),
+        )
     elif name == "removeViewBox":
         root.attrib.pop("viewBox", None)
     elif name == "removeXlink":
@@ -408,6 +421,72 @@ def minify_styles(root: ET.Element) -> None:
             element.set("style", ";".join(parts))
         else:
             element.attrib.pop("style", None)
+
+
+def inline_style_elements(root: ET.Element, *, remove_style_elements: bool = False) -> None:
+    rules: list[tuple[str, dict[str, str]]] = []
+    style_elements: list[ET.Element] = []
+    parents = parent_map(root)
+    original_styles = {element: parse_style(element.attrib.get("style")) for element in walk(root)}
+    applied_styles: dict[ET.Element, dict[str, str]] = {}
+    for element in walk(root):
+        if local_name(element.tag) != "style" or not element.text:
+            continue
+        style_elements.append(element)
+        rules.extend(parse_css_rules(element.text))
+
+    for selector, declarations in rules:
+        for element in walk(root):
+            if local_name(element.tag) == "style":
+                continue
+            if selector_matches(element, selector):
+                applied_styles.setdefault(element, {}).update(declarations)
+
+    for element, declarations in applied_styles.items():
+        merged = {**declarations, **original_styles.get(element, {})}
+        element.set("style", style_text(merged))
+
+    if remove_style_elements:
+        for element in style_elements:
+            parent = parents.get(element)
+            if parent is not None:
+                parent.remove(element)
+
+
+def parse_css_rules(css: str) -> list[tuple[str, dict[str, str]]]:
+    css = re.sub(r"/\*[\s\S]*?\*/", "", css)
+    rules: list[tuple[str, dict[str, str]]] = []
+    for selector_text, body in re.findall(r"([^{}@]+)\{([^{}]*)\}", css):
+        declarations = parse_style(body)
+        if not declarations:
+            continue
+        for selector in selector_text.split(","):
+            selector = selector.strip()
+            if selector:
+                rules.append((selector, declarations))
+    return rules
+
+
+def selector_matches(element: ET.Element, selector: str) -> bool:
+    selector = selector.strip()
+    if not selector or any(token in selector for token in (" ", ">", "+", "~", "[", ":")):
+        return False
+    name = local_name(element.tag)
+    classes = set(element.attrib.get("class", "").split())
+    ident = element.attrib.get("id")
+    if selector == "*":
+        return True
+    if selector.startswith("."):
+        return selector[1:] in classes
+    if selector.startswith("#"):
+        return selector[1:] == ident
+    if "." in selector:
+        tag, cls = selector.split(".", 1)
+        return tag == name and cls in classes
+    if "#" in selector:
+        tag, wanted = selector.split("#", 1)
+        return tag == name and wanted == ident
+    return selector == name
 
 
 def parse_style(style: str | None) -> dict[str, str]:
@@ -661,32 +740,63 @@ def parse_points(points: str) -> list[tuple[float, float]]:
 
 def convert_transforms(root: ET.Element, options: OptimizeOptions) -> None:
     decimals = 4 if options.float_precision is None else options.float_precision
-    for element in walk(root):
+
+    def visit(element: ET.Element, inherited: tuple[float, float, float, float, float, float]) -> None:
         transform = element.attrib.get("transform")
-        if not transform:
-            continue
-        try:
-            matrix = parse_transform(transform)
-        except (PathDataError, ValueError):
-            continue
-        name = local_name(element.tag)
-        if name == "path" and "d" in element.attrib:
+        local_matrix: tuple[float, float, float, float, float, float] = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+        if transform:
             try:
-                path = PathData.parse(element.attrib["d"]).transform(matrix)
-            except PathDataError:
-                continue
-            element.set("d", path.to_string(decimals, True))
+                local_matrix = parse_transform(transform)
+            except (PathDataError, ValueError):
+                local_matrix = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+        matrix = matrix_multiply(inherited, local_matrix)
+        try:
+            apply_transform_to_element(element, matrix, decimals, options)
+        except PathDataError:
+            pass
+
+        name = local_name(element.tag)
+        container_flattenable = name in TRANSFORM_CONTAINERS and transform_subtree_is_flattenable(element)
+        if name in GEOMETRY_TAGS and "transform" in element.attrib:
             element.attrib.pop("transform", None)
-        elif name in {"rect", "line", "polyline", "polygon", "circle", "ellipse"}:
-            d = shape_to_path_d(element, options)
-            if not d:
-                continue
-            path = PathData.parse(d).transform(matrix)
-            element.tag = qname(namespace(root.tag), "path")
-            for attr in list(element.attrib):
-                if local_name(attr) in SHAPE_ATTRS or attr == "transform":
-                    element.attrib.pop(attr, None)
-            element.set("d", path.to_string(decimals, True))
+        if container_flattenable and "transform" in element.attrib:
+            element.attrib.pop("transform", None)
+        child_inherited = matrix if container_flattenable or name not in TRANSFORM_CONTAINERS else (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+        for child in list(element):
+            visit(child, child_inherited)
+
+    visit(root, (1.0, 0.0, 0.0, 1.0, 0.0, 0.0))
+
+
+GEOMETRY_TAGS = {"path", "rect", "line", "polyline", "polygon", "circle", "ellipse"}
+TRANSFORM_CONTAINERS = {"svg", "g", "defs", "clipPath", "mask", "pattern", "symbol", "marker"}
+
+
+def transform_subtree_is_flattenable(root: ET.Element) -> bool:
+    for element in root.iter():
+        name = local_name(element.tag)
+        if name not in GEOMETRY_TAGS and name not in TRANSFORM_CONTAINERS:
+            return False
+    return True
+
+
+def apply_transform_to_element(element: ET.Element, matrix: tuple[float, float, float, float, float, float], decimals: int, options: OptimizeOptions) -> None:
+    name = local_name(element.tag)
+    if matrix == (1.0, 0.0, 0.0, 1.0, 0.0, 0.0):
+        return
+    if name == "path" and "d" in element.attrib:
+        path = PathData.parse(element.attrib["d"]).transform(matrix)
+        element.set("d", path.to_string(decimals, True))
+    elif name in {"rect", "line", "polyline", "polygon", "circle", "ellipse"}:
+        d = shape_to_path_d(element, options)
+        if not d:
+            return
+        path = PathData.parse(d).transform(matrix)
+        element.tag = qname(namespace(element.tag), "path")
+        for attr in list(element.attrib):
+            if local_name(attr) in SHAPE_ATTRS or attr == "transform":
+                element.attrib.pop(attr, None)
+        element.set("d", path.to_string(decimals, True))
 
 
 def convert_path_data(root: ET.Element, options: OptimizeOptions) -> None:
@@ -836,6 +946,44 @@ def remove_elements_by_attr(root: ET.Element, params: dict[str, Any]) -> None:
             continue
         if all(element.attrib.get(str(key)) == str(value) for key, value in attrs.items()):
             parents[element].remove(element)
+
+
+def remove_event_attrs(root: ET.Element) -> None:
+    for element in walk(root):
+        for key in list(element.attrib):
+            if local_name(key).lower().startswith("on"):
+                element.attrib.pop(key, None)
+
+
+def remove_unsafe_links(root: ET.Element, *, remove_external: bool = False, allow_data_images: bool = True) -> None:
+    parents = parent_map(root)
+    for element in list(root.iter()):
+        if local_name(element.tag) == "style" and element.text and is_unsafe_url_text(
+            element.text,
+            remove_external=remove_external,
+            allow_data_images=allow_data_images,
+        ):
+            parent = parents.get(element)
+            if parent is not None:
+                parent.remove(element)
+            continue
+        for key, value in list(element.attrib.items()):
+            lname = local_name(key)
+            if lname in {"href", "src"} and is_unsafe_url_text(value, remove_external=remove_external, allow_data_images=allow_data_images):
+                element.attrib.pop(key, None)
+            elif lname == "style" and is_unsafe_url_text(value, remove_external=remove_external, allow_data_images=allow_data_images):
+                element.attrib.pop(key, None)
+
+
+def is_unsafe_url_text(value: str, *, remove_external: bool = False, allow_data_images: bool = True) -> bool:
+    text = value.strip().strip("\"'").lower()
+    if "javascript:" in text or "vbscript:" in text or "expression(" in text:
+        return True
+    if text.startswith("data:"):
+        return not (allow_data_images and text.startswith("data:image/"))
+    if remove_external and (text.startswith(("http:", "https:", "//")) or "url(http:" in text or "url(https:" in text or "url(//" in text):
+        return True
+    return False
 
 
 def remove_xlink(root: ET.Element) -> None:

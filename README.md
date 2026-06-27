@@ -2,8 +2,8 @@
 
 `svgo` is a pure-Python SVG toolchain for path editing, SVG optimization,
 PNG icon tracing, centerline reconstruction, geometry conversion, matrix
-transforms, and SVG inspection. It ships as an importable Python package and
-as a single `svgo` command-line program.
+transforms, measurement, sanitization, and SVG inspection. It ships as an
+importable Python package and as a single `svgo` command-line program.
 
 The package has no required runtime dependencies. If `numpy` is installed,
 some centerline distance-transform work can use accelerated array operations;
@@ -21,9 +21,10 @@ otherwise the standard-library fallback is used.
 - Convert filled stroke outlines into approximate stroked centerlines.
 - Convert SVG geometry primitives to path data and create common affine
   matrices from Python.
+- Measure path/SVG length, bounds, and point-at-length coordinates.
 - Validate SVG XML, inspect dimensions/element counts/fonts, and run
-  structural conversions such as shape-to-path conversion, plain cleanup, and
-  transform flattening.
+  structural conversions such as shape-to-path conversion, plain cleanup,
+  CSS style inlining, sanitization, and transform flattening.
 - Use the same functionality from Python APIs or from the documented CLI.
 
 ## Installation
@@ -60,6 +61,8 @@ svgo trace  --input icon.png --output traced.svg [trace options]          # alia
 svgo center --input outline.svg --output stroke.svg [centerline options]  # alias: c
 svgo info   --input icon.svg                                             # alias: i
 svgo validate --input icon.svg [--strict]                                # alias: v
+svgo measure --input icon.svg                                            # alias: m
+svgo sanitize --input icon.svg --output safe.svg                         # alias: s
 svgo convert --input icon.svg --output converted.svg [conversion options] # alias: x
 svgo plugins                                                             # alias: l
 ```
@@ -74,6 +77,8 @@ svgo trace --help
 svgo center --help
 svgo info --help
 svgo validate --help
+svgo measure --help
+svgo sanitize --help
 svgo convert --help
 ```
 
@@ -216,6 +221,23 @@ svgo validate --input icon.svg
 svgo v --input icon.svg --strict --json
 ```
 
+`svgo measure` reports path/SVG length and axis-aligned bounds. It accepts raw
+path data, SVG files, or text files containing path data:
+
+```bash
+svgo measure --path "M0 0H10V10H0Z" --decimals 3
+svgo m --input icon.svg --compact
+svgo m --path "M0 0H10V10" --at 15
+```
+
+`svgo sanitize` removes active or unsafe content while keeping normal static
+SVG geometry:
+
+```bash
+svgo sanitize --input icon.svg --output icon.safe.svg
+svgo s --input icon.svg --remove-external-refs --remove-styles
+```
+
 `svgo convert` runs pure-Python structural conversions. With no conversion
 flags it converts basic shapes to paths:
 
@@ -223,6 +245,7 @@ flags it converts basic shapes to paths:
 svgo convert --input shapes.svg --output paths.svg
 svgo x --input drawing.svg --output plain.svg --to-plain
 svgo x --input transformed.svg --output flat.svg --shapes-to-paths --flatten-transforms
+svgo x --input styled.svg --output inline.svg --inline-styles
 svgo x --input source.svg --output converted.svg --all --precision 3
 ```
 
@@ -233,6 +256,10 @@ Conversion options:
   `polyline`, and `polygon` to `path`.
 - `--flatten-transforms`: bake supported transforms into path coordinates.
 - `--flatten-groups`: collapse empty unstyled groups.
+- `--inline-styles`: inline simple style-element rules into presentation
+  attributes.
+- `--sanitize`: remove scripts, event handlers, and unsafe links before
+  conversion.
 - `--all`: enable every conversion pass.
 - `--precision N`: control generated numeric precision.
 
@@ -244,9 +271,12 @@ from svgo_py import (
     centerline_path_data,
     circle_to_path,
     get_svg_info,
+    inline_styles_svg,
     optimize_svg,
+    path_metrics,
     path_to_cubics,
     rect_to_path,
+    sanitize_svg,
     trace_png,
     transform_2d,
     translate_2d,
@@ -263,6 +293,8 @@ shape = rect_to_path(0, 0, 24, 12, rx=2, decimals=3, minify=True)
 cubic = path_to_cubics("M0 0L10 0Q15 0 15 5", decimals=3, minify=True)
 x, y = transform_2d(translate_2d(10, 5), 1, 2)
 report = validate_svg("<svg viewBox='0 0 10 10'/>")
+metrics = path_metrics("M0 0H10V10H0Z", decimals=3)
+safe_svg = sanitize_svg("<svg onload='x()'><path d='M0 0H1'/></svg>")
 ```
 
 The lower-level modules are:

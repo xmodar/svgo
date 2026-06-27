@@ -72,6 +72,16 @@ class CliTests(unittest.TestCase):
         self.assertIn("<path", stdout)
         self.assertNotIn("<circle", stdout)
 
+    def test_sanitize_alias_removes_scripts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            svg = Path(tmp) / "unsafe.svg"
+            svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" onclick="x()"><script>x()</script><path d="M0 0H1"/></svg>', encoding="utf-8")
+            code, stdout, stderr = self.run_cli(["s", "--input", str(svg)])
+        self.assertEqual(code, 0, stderr)
+        self.assertNotIn("script", stdout)
+        self.assertNotIn("onclick", stdout)
+        self.assertIn("<path", stdout)
+
     def test_removed_long_compatibility_names(self):
         code, _stdout, stderr = self.run_cli(["optimize", "--help"])
         self.assertNotEqual(code, 0)

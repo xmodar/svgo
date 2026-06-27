@@ -65,12 +65,18 @@ def validate_svg(svg_input: str | Path, *, strict: bool = False) -> dict[str, An
 
     for element in root.iter():
         name = local_name(element.tag)
+        if name == "script":
+            issues.append({"level": "error", "reason": "SVG contains a <script> element"})
         if name not in KNOWN_SVG_ELEMENTS:
             issues.append({"level": "warning", "reason": f"Unknown or uncommon SVG element: {name}"})
         for key, value in element.attrib.items():
             attr = local_name(key)
+            if attr.lower().startswith("on"):
+                issues.append({"level": "error", "reason": f"Event handler attribute on <{name}>: {attr}"})
             if "href" in attr and value.strip().lower().startswith("javascript:"):
                 issues.append({"level": "error", "reason": f"Potentially unsafe href on <{name}>"})
+            if attr == "style" and re.search(r"javascript:|vbscript:|expression\s*\(", value, flags=re.I):
+                issues.append({"level": "error", "reason": f"Potentially unsafe style on <{name}>"})
             if any(ns in key for ns in EDITOR_NAMESPACES):
                 issues.append({"level": "warning", "reason": f"Editor-specific attribute on <{name}>: {attr}"})
 
@@ -126,6 +132,53 @@ def to_plain_svg(svg_text: str, *, precision: int | None = None) -> str:
                 PluginSpec("removeComments"),
                 PluginSpec("removeMetadata"),
                 PluginSpec("removeEditorsNSData"),
+                PluginSpec("cleanupAttrs"),
+                PluginSpec("removeEmptyContainers"),
+                PluginSpec("sortAttrs"),
+            ],
+            float_precision=precision,
+        ),
+    )
+
+
+def sanitize_svg(
+    svg_text: str,
+    *,
+    precision: int | None = None,
+    remove_external_refs: bool = False,
+    allow_data_images: bool = True,
+    remove_styles: bool = False,
+    remove_raster_images: bool = False,
+) -> str:
+    """Remove active content and optionally external references from SVG text."""
+    plugins = [
+        PluginSpec("removeComments"),
+        PluginSpec("removeScripts"),
+        PluginSpec("removeScriptElement"),
+        PluginSpec("removeEventAttributes"),
+        PluginSpec("removeUnsafeLinks", {"removeExternal": remove_external_refs, "allowDataImages": allow_data_images}),
+        PluginSpec("cleanupAttrs"),
+        PluginSpec("removeEmptyAttrs"),
+        PluginSpec("removeEmptyContainers"),
+        PluginSpec("sortAttrs"),
+    ]
+    if remove_styles:
+        plugins.insert(3, PluginSpec("removeStyleElement"))
+        plugins.append(PluginSpec("removeAttrs", {"attrs": "style"}))
+    if remove_raster_images:
+        plugins.insert(3, PluginSpec("removeRasterImages"))
+    return optimize_svg(svg_text, OptimizeOptions(preset="none", plugins=plugins, float_precision=precision))
+
+
+def inline_styles_svg(svg_text: str, *, precision: int | None = None, remove_style_elements: bool = True) -> str:
+    """Inline simple style-element rules into SVG presentation attributes."""
+    return optimize_svg(
+        svg_text,
+        OptimizeOptions(
+            preset="none",
+            plugins=[
+                PluginSpec("inlineStyles", {"removeStyleElement": remove_style_elements}),
+                PluginSpec("convertStyleToAttrs"),
                 PluginSpec("cleanupAttrs"),
                 PluginSpec("removeEmptyContainers"),
                 PluginSpec("sortAttrs"),
