@@ -352,8 +352,8 @@ shape, and API expectations:
 
 ## Development
 
-This repository uses a small in-repo PEP 517 build backend and has no required
-runtime dependencies.
+This repository uses uv's native `uv_build` backend and has no required runtime
+dependencies.
 
 ```bash
 uv run python -m unittest discover -s tests
