@@ -317,10 +317,36 @@ The lower-level modules are:
 
 - `svgo_py.pathdata`
 - `svgo_py.geometry`
+- `svgo_py.measure`
+- `svgo_py.viewport`
 - `svgo_py.inspect_svg`
 - `svgo_py.svg_optimize`
 - `svgo_py.raster_trace`
 - `svgo_py.centerline`
+
+## Reference Tools
+
+These projects are useful reference points for SVG feature coverage, command
+shape, and API expectations:
+
+- [SVGO](https://github.com/svg/svgo): Node.js SVG optimizer and plugin
+  ecosystem.
+- [Scour](https://github.com/scour-project/scour): Python SVG optimizer and
+  cleaner.
+- [svgpathtools](https://github.com/mathandy/svgpathtools): Python path,
+  Bezier, geometry, length, and bounds utilities.
+- [svg.path](https://github.com/regebro/svg.path): Python SVG path parser and
+  path object model.
+- [svg-matrix-python](https://github.com/Emasoft/svg-matrix-python): Python
+  wrapper around SVG matrix conversion and validation workflows.
+- [svg-path-commander](https://github.com/thednp/svg-path-commander):
+  TypeScript path parsing, normalization, geometry, and transformation tools.
+- [Iconify Tools](https://github.com/iconify/tools): TypeScript SVG import,
+  validation, cleanup, and export tooling.
+- [resvg/usvg](https://github.com/linebender/resvg): Rust SVG rendering and
+  static SVG simplification/reference implementation.
+- [VTracer](https://github.com/visioncortex/vtracer): Rust raster-to-vector
+  tracing tool.
 
 ## Development
 
