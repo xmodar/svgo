@@ -370,8 +370,8 @@ To publish a release, update `project.version`, commit the change, and push a
 matching tag:
 
 ```bash
-git tag v0.1.0b1
-git push origin v0.1.0b1
+git tag v0.1.0b2
+git push origin v0.1.0b2
 ```
 
 The workflow verifies that the pushed tag equals `v{project.version}`, runs the

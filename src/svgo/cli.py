@@ -215,6 +215,7 @@ def copy_arguments(source: argparse.ArgumentParser, target: argparse.ArgumentPar
         if not action.option_strings or action.dest == "help":
             continue
         kwargs: dict[str, object] = {
+            "dest": action.dest,
             "help": action.help,
             "default": action.default,
             "required": action.required,

@@ -38,6 +38,18 @@ class ViewportTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('viewBox="2 3 4 4"', stdout.getvalue())
 
+    def test_viewbox_cli_set_uses_cloned_dest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "icon.svg"
+            source.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><path d="M0 0H1"/></svg>', encoding="utf-8")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = main(["viewbox", "--input", str(source), "--set", "0 0 24 24", "--remove-dimensions"])
+        self.assertEqual(code, 0)
+        self.assertIn('viewBox="0 0 24 24"', stdout.getvalue())
+        self.assertNotIn('width="10"', stdout.getvalue())
+        self.assertNotIn('height="10"', stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
