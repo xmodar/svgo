@@ -1,0 +1,51 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: publish-pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/svgo/
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+
+      - name: Verify tag matches package version
+        run: |
+          uv run python -c "import os, pathlib, sys, tomllib; version = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version']; expected = f'v{version}'; tag = os.environ['GITHUB_REF_NAME']; sys.exit(0 if tag == expected else f'Tag {tag!r} does not match package version {expected!r}')"
+
+      - name: Run tests
+        run: uv run python -m unittest discover -s tests
+
+      - name: Build distributions
+        run: uv build --clear
+
+      - name: Publish distributions
+        run: uv publish --trusted-publishing always dist/*

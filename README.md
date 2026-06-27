@@ -360,4 +360,22 @@ uv run python -m unittest discover -s tests
 uv build
 ```
 
+## Publishing
+
+PyPI publishing is handled by GitHub Actions Trusted Publishing through
+`.github/workflows/publish.yml`. The PyPI pending publisher must match this
+repository, the `publish.yml` workflow filename, and the `pypi` environment.
+
+To publish a release, update `project.version`, commit the change, and push a
+matching tag:
+
+```bash
+git tag v0.1.0b1
+git push origin v0.1.0b1
+```
+
+The workflow verifies that the pushed tag equals `v{project.version}`, runs the
+test suite, builds the wheel and source distribution with `uv`, then publishes
+to PyPI with Trusted Publishing.
+
 The package targets Python 3.11 and newer.
