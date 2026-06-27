@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "svgo"
-version = "0.1.0"
+version = "0.2.0"
 description = "Rust SVG path editing, optimization, matrix geometry, measurement, sanitization, viewport editing, validation, tracing, and centerline reconstruction with Python bindings."
 readme = "README.md"
 requires-python = ">=3.11"
