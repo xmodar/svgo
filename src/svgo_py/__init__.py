@@ -1,4 +1,4 @@
-"""Pure-Python SVG operations inspired by the Codex svgo skill."""
+"""Pure-Python SVG path editing, optimization, tracing, and centerline APIs."""
 
 from .centerline import centerline_path_data, centerline_svg_text
 from .pathdata import PathData

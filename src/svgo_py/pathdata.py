@@ -247,7 +247,7 @@ def parse_matrix_values(text: str) -> Matrix:
 
 
 class PathData:
-    """Parsed SVG path data with mutating operations matching the skill CLI."""
+    """Parsed SVG path data with mutating editing and optimization operations."""
 
     def __init__(self, segments: list[Segment], relative: bool = False) -> None:
         self.segments = segments
