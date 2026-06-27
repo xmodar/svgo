@@ -1,4 +1,5 @@
 import unittest
+from xml.etree import ElementTree as ET
 
 from svgo.raster_trace import Image, RasterTraceError, TraceOptions, trace_image
 
@@ -28,7 +29,14 @@ class RasterTraceTests(unittest.TestCase):
         )
         out = trace_image(image, TraceOptions(mode="exact", curve_mode="exact", min_area=1))
         self.assertIn("#001818", out)
-        self.assertIn("L1 0", out)
+        root = ET.fromstring(out)
+        path = root.find("{http://www.w3.org/2000/svg}path")
+        self.assertIsNotNone(path)
+        d = path.attrib["d"]
+        for point in ("0 0", "1 0", "1 1", "0 1"):
+            self.assertIn(point, d)
+        self.assertNotIn("C", d)
+        self.assertNotIn("Q", d)
 
     def test_rejects_non_pixel_curve_modes(self):
         image = Image(
