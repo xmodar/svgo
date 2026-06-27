@@ -339,6 +339,8 @@ shape, and API expectations:
   path object model.
 - [svg-matrix-python](https://github.com/Emasoft/svg-matrix-python): Python
   wrapper around SVG matrix conversion and validation workflows.
+- [Yqnn/svg-path-editor](https://github.com/Yqnn/svg-path-editor): SVG path
+  editing UI and path operation reference implementation.
 - [svg-path-commander](https://github.com/thednp/svg-path-commander):
   TypeScript path parsing, normalization, geometry, and transformation tools.
 - [Iconify Tools](https://github.com/iconify/tools): TypeScript SVG import,
