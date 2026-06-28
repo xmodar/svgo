@@ -1,14 +1,17 @@
 # svgo
 
-`svgo` is a Rust-backed SVG toolkit with Python bindings and a single command
-line interface. It focuses on practical SVG asset work: path editing, document
-optimization, measurement, inspection, validation, sanitization, viewport
-editing, PNG tracing, and approximate centerline reconstruction.
+`svgo` is a Rust-backed SVG toolkit distributed as a Python package with a
+single command line interface. It focuses on practical SVG asset work: path
+editing, document optimization, measurement, inspection, validation,
+sanitization, viewport editing, PNG tracing, approximate centerline
+reconstruction, and reusable declarative recipes.
 
-The Python package is intentionally thin. The native `svgo._svgo` extension
-does the parsing, transforms, optimization, tracing, and centerline work; the
-Python modules provide dataclass options, importable helpers, and a stable
-recipe surface.
+For normal use, run the published CLI directly:
+
+```powershell
+uvx svgo --help
+uvx svgo <command> --help
+```
 
 ## Features
 
@@ -25,9 +28,7 @@ recipe surface.
 - Trace non-interlaced 8-bit PNG icons into filled SVG paths, including
   component-level JSON for recipe pipelines.
 - Reconstruct approximate centerline strokes from filled outlines.
-- Use Python helper utilities for icon conversion recipes, geometry cleanup,
-  path simplification, color normalization, polyline stitching, and adaptive
-  rounding.
+- Build reusable JSON recipes that run existing `svgo` commands in sequence.
 
 ## Installation
 
@@ -36,7 +37,6 @@ From PyPI:
 ```powershell
 uvx svgo --help
 uvx svgo --version
-uv run --with svgo svgo --help
 ```
 
 From this repository:
@@ -83,6 +83,7 @@ Commands:
 | `viewbox` | `b` | Edit `viewBox`, `width`, and `height` metadata. |
 | `convert` | `x` | Convert shapes, transforms, styles, and editor markup. |
 | `plugins` | `l` | List optimizer plugins. |
+| `recipe` | `r` | Run declarative SVG conversion recipes. |
 
 ### Path Editing
 
@@ -262,88 +263,78 @@ Conversion flags:
 
 With no conversion flag, `convert` defaults to `--shapes-to-paths`.
 
-## Python API
+## Declarative Recipes
 
-```python
-from svgo import (
-    CenterlineOptions,
-    PathData,
-    TraceOptions,
-    centerline_path_data,
-    fit_viewbox_svg,
-    optimize_svg,
-    path_metrics,
-    rect_to_path,
-    sanitize_svg,
-    trace_png,
-    trace_png_components,
-    transform_2d,
-    translate_2d,
-    validate_svg,
-)
+Use `svgo recipe` when a workflow needs repeated steps, batch processing, or a
+report. A recipe is JSON with a `steps` array. Each step uses a normal command
+name and the long CLI option names converted to JSON keys.
 
-path = PathData.parse("M0 0L10 0L10 10Z")
-path.transform((1, 0, 0, 1, 2, -1))
-path.optimize("safe")
-print(path.to_string(decimals=3, minify=True))
-
-svg = optimize_svg("<svg><rect width='10' height='10'/></svg>")
-shape = rect_to_path(0, 0, 24, 12, rx=2, decimals=3, minify=True)
-x, y = transform_2d(translate_2d(10, 5), 1, 2)
-report = validate_svg("<svg viewBox='0 0 10 10'/>")
-metrics = path_metrics("M0 0H10V10H0Z", decimals=3)
-safe_svg = sanitize_svg("<svg onload='x()'><path d='M0 0H1'/></svg>")
-fitted_svg = fit_viewbox_svg("<svg><path d='M2 3H6V7H2Z'/></svg>")
-components = trace_png_components("icon.png", TraceOptions(mode="palette", min_area=8))
-d, stroke_width, ctx = centerline_path_data("M0 0H30V6H0Z", CenterlineOptions(polyline=True))
-```
-
-Recipe utilities are available from the top-level package:
-
-```python
-from svgo import (
-    filled_loops,
-    normalize_color,
-    radial_centerline_candidate,
-    remove_collinear_points,
-    serialize_polyline_subpaths,
-    simplify_rdp,
-    stitch_subpaths,
-)
-
-color = normalize_color("143861")
-loops = filled_loops("M0 0H10V10H0Z")
-points = remove_collinear_points([(0, 0), (5, 0), (10, 0), (10, 5)])
-simple = simplify_rdp(points, "0.5")
-candidate = radial_centerline_candidate("M0 0H20V20H0Z M5 5H15V15H5Z")
-```
-
-Lower-level modules:
-
-- `svgo.pathdata`
-- `svgo.path_utils`
-- `svgo.geometry`
-- `svgo.measure`
-- `svgo.viewport`
-- `svgo.inspect_svg`
-- `svgo.svg_optimize`
-- `svgo.raster_trace`
-- `svgo.vtracer_trace`
-- `svgo.centerline`
-
-## Recipes
-
-`recipes/two_color_centerline_icons.py` converts two-color antialiased PNG line
-icons into grouped centerline SVGs. It traces components with a fixed palette,
-chooses a centerline strategy for each filled component, stitches fragmented
-chains, preserves useful branches, and emits one grouped stroke per color.
+Create a starter recipe:
 
 ```powershell
-uv run --no-sync python recipes/two_color_centerline_icons.py input-pngs output-svgs --jobs 4 --report report.json
+uvx svgo recipe init --kind cleanup --output cleanup.svgo.json
+uvx svgo recipe init --kind centerline-icons --output centerline-icons.svgo.json
 ```
 
-The recipe is built on public `svgo` APIs so the same helpers can be reused in
-other conversion pipelines.
+Run a recipe on one file or a directory:
+
+```powershell
+uvx svgo recipe run --recipe cleanup.svgo.json --input source.svg --output source.min.svg --report report.json
+uvx svgo recipe run --recipe centerline-icons.svgo.json --input input-pngs --output output-svgs --report report.json
+```
+
+Minimal cleanup recipe:
+
+```json
+{
+  "name": "svg-cleanup",
+  "outputExtension": ".svg",
+  "steps": [
+    { "command": "sanitize", "removeExternalRefs": true },
+    { "command": "convert", "all": true, "precision": 3 },
+    { "command": "viewbox", "fitContent": true, "padding": 1, "removeDimensions": true, "precision": 3 },
+    { "command": "validate", "strict": true },
+    { "command": "opt", "multipass": true, "precision": 3 }
+  ]
+}
+```
+
+PNG centerline recipe:
+
+```json
+{
+  "name": "centerline-icons",
+  "outputExtension": ".svg",
+  "steps": [
+    {
+      "command": "trace",
+      "mode": "palette",
+      "palette": ["#143861", "#00b795"],
+      "dropWhite": true,
+      "whiteThreshold": 245,
+      "alphaThreshold": 16,
+      "minArea": 80,
+      "decimals": 1
+    },
+    {
+      "command": "center",
+      "svgPaths": "all",
+      "mode": "all",
+      "polyline": true,
+      "bridgeGap": 12,
+      "keepFailed": true,
+      "strokeWidth": "auto",
+      "decimals": 2
+    },
+    { "command": "opt", "multipass": true, "precision": 2 }
+  ]
+}
+```
+
+Supported recipe step commands are `validate`, `sanitize`, `convert`,
+`viewbox`, `path`, `trace`, `trace2`, `center`, `opt`, `info`, and `measure`.
+Recipes preserve input files and write to the requested output path or output
+directory.
 
 ## Project Layout
 
@@ -358,11 +349,12 @@ other conversion pipelines.
   viewport utilities.
 - `rust/src/trace.rs`: PNG decoding, native tracing, and VTracer-style options.
 - `rust/src/centerline.rs`: raster skeletonization and centerline generation.
-- `rust/src/cli.rs`: command-line argument handling and help text.
+- `rust/src/cli.rs`: command-line argument handling, recipe execution, and
+  help text.
 - `rust/src/python.rs`: PyO3 module registration.
 - `rust/src/bin/svgo.rs`: Rust binary entry point.
 - `src/svgo/*.py`: Python bindings, dataclass options, and helper utilities.
-- `recipes/`: higher-level conversion workflows built from public APIs.
+- `recipes/`: reusable JSON recipe examples for `svgo recipe run`.
 - `tests/`: Python tests for the Rust-backed package surface and CLI.
 
 ## Contributing

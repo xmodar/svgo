@@ -59,6 +59,7 @@ class CliTests(unittest.TestCase):
             (["viewbox", "--help"], "Edit root SVG viewBox"),
             (["convert", "--help"], "Convert and normalize"),
             (["plugins", "--help"], "List built-in optimizer plugins"),
+            (["recipe", "--help"], "declarative JSON recipes"),
         ):
             with self.subTest(argv=argv):
                 code, stdout, stderr = self.run_cli(argv)
@@ -158,6 +159,51 @@ class CliTests(unittest.TestCase):
         code, _stdout, stderr = self.run_cli(["optimize", "--help"])
         self.assertNotEqual(code, 0)
         self.assertIn("invalid choice", stderr)
+
+    def test_recipe_init_outputs_json_template(self):
+        code, stdout, stderr = self.run_cli(["recipe", "init", "--kind", "cleanup"])
+        self.assertEqual(code, 0, stderr)
+        template = json.loads(stdout)
+        self.assertEqual(template["name"], "svg-cleanup")
+        self.assertGreaterEqual(len(template["steps"]), 3)
+
+    def test_recipe_run_cleanup_pipeline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "icon.svg"
+            recipe = root / "cleanup.svgo.json"
+            output = root / "out.svg"
+            report = root / "report.json"
+            source.write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect x="1" y="2" width="3" height="4"/></svg>',
+                encoding="utf-8",
+            )
+            recipe.write_text(
+                json.dumps(
+                    {
+                        "steps": [
+                            {"command": "sanitize"},
+                            {"command": "convert", "shapesToPaths": True, "precision": 2},
+                            {"command": "viewbox", "fitContent": True, "padding": 0, "removeDimensions": True, "precision": 2},
+                            {"command": "validate", "strict": True},
+                            {"command": "opt", "multipass": True, "precision": 2},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            code, stdout, stderr = self.run_cli(
+                ["recipe", "run", "--recipe", str(recipe), "--input", str(source), "--output", str(output), "--report", str(report)]
+            )
+            self.assertEqual(code, 0, stderr)
+            self.assertIn(str(output), stdout)
+            result = output.read_text(encoding="utf-8")
+            self.assertIn("viewBox", result)
+            self.assertIn("<path", result)
+            details = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(details[0]["output"], str(output))
+            self.assertEqual(details[0]["steps"][3]["command"], "validate")
+            self.assertTrue(details[0]["steps"][3]["valid"])
 
 
 if __name__ == "__main__":

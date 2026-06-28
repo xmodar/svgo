@@ -734,6 +734,629 @@ fn run_convert_cli(args: &[String]) -> Result<String> {
     write_file_or_return(result, output)
 }
 
+fn recipe_value<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    keys.iter().find_map(|key| value.get(*key))
+}
+
+fn recipe_string(value: &Value, keys: &[&str]) -> Option<String> {
+    recipe_value(value, keys).and_then(|item| match item {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    })
+}
+
+fn recipe_bool(value: &Value, keys: &[&str], default: bool) -> bool {
+    recipe_value(value, keys)
+        .and_then(|item| match item {
+            Value::Bool(flag) => Some(*flag),
+            Value::String(text) => match text.to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => Some(true),
+                "false" | "0" | "no" | "off" => Some(false),
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+fn recipe_usize(value: &Value, keys: &[&str]) -> Result<Option<usize>> {
+    let Some(item) = recipe_value(value, keys) else {
+        return Ok(None);
+    };
+    match item {
+        Value::Number(number) => number
+            .as_u64()
+            .map(|n| Some(n as usize))
+            .ok_or_else(|| SvgoError(format!("{} must be a non-negative integer", keys[0]))),
+        Value::String(text) => text
+            .parse::<usize>()
+            .map(Some)
+            .map_err(|_| SvgoError(format!("{} must be a non-negative integer", keys[0]))),
+        _ => Err(SvgoError(format!("{} must be a non-negative integer", keys[0]))),
+    }
+}
+
+fn recipe_f64(value: &Value, keys: &[&str]) -> Result<Option<f64>> {
+    let Some(item) = recipe_value(value, keys) else {
+        return Ok(None);
+    };
+    match item {
+        Value::Number(number) => number
+            .as_f64()
+            .map(Some)
+            .ok_or_else(|| SvgoError(format!("{} must be a number", keys[0]))),
+        Value::String(text) => text
+            .parse::<f64>()
+            .map(Some)
+            .map_err(|_| SvgoError(format!("{} must be a number", keys[0]))),
+        _ => Err(SvgoError(format!("{} must be a number", keys[0]))),
+    }
+}
+
+fn recipe_string_list(value: &Value, keys: &[&str]) -> Result<Vec<String>> {
+    let Some(item) = recipe_value(value, keys) else {
+        return Ok(Vec::new());
+    };
+    match item {
+        Value::String(text) => Ok(vec![text.clone()]),
+        Value::Array(items) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| SvgoError(format!("{} entries must be strings", keys[0])))
+            })
+            .collect(),
+        _ => Err(SvgoError(format!("{} must be a string or string array", keys[0]))),
+    }
+}
+
+fn recipe_plugin_specs(value: &Value, keys: &[&str]) -> Result<Vec<PluginSpecCore>> {
+    let Some(item) = recipe_value(value, keys) else {
+        return Ok(Vec::new());
+    };
+    let items = item
+        .as_array()
+        .ok_or_else(|| SvgoError(format!("{} must be an array", keys[0])))?;
+    let mut plugins = Vec::new();
+    for item in items {
+        if let Some(spec) = item.as_str() {
+            plugins.push(parse_plugin_spec_cli(spec)?);
+        } else if let Some(object) = item.as_object() {
+            let name = object
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| SvgoError("recipe plugin objects require a name".to_string()))?;
+            let params = object.get("params").cloned().unwrap_or_else(|| json!({}));
+            if !params.is_object() {
+                return Err(SvgoError(format!("Plugin params for {} must be a JSON object", name)));
+            }
+            plugins.push(PluginSpecCore { name: name.to_string(), params });
+        } else {
+            return Err(SvgoError("recipe plugins must be strings or objects".to_string()));
+        }
+    }
+    Ok(plugins)
+}
+
+fn recipe_opt_options(step: &Value) -> Result<OptimizeOptionsCore> {
+    let mut options = OptimizeOptionsCore::default();
+    if let Some(preset) = recipe_string(step, &["preset", "svgoPreset", "svgo_preset"]) {
+        options.preset = preset;
+    }
+    if let Some(precision) = recipe_usize(step, &["precision", "svgoPrecision", "svgo_precision", "floatPrecision", "float_precision"])? {
+        options.float_precision = Some(precision.min(20));
+    }
+    options.plugins = recipe_plugin_specs(step, &["plugins", "svgoPlugins", "svgo_plugins"])?;
+    options.disabled = recipe_string_list(step, &["disabled", "disable", "svgoDisabled", "svgo_disabled"])?;
+    options.multipass = recipe_bool(step, &["multipass", "svgoMultipass", "svgo_multipass"], false);
+    options.pretty = recipe_bool(step, &["pretty", "svgoPretty", "svgo_pretty"], false);
+    if let Some(indent) = recipe_usize(step, &["indent", "svgoIndent", "svgo_indent"])? {
+        options.indent = indent;
+    }
+    options.eol = recipe_string(step, &["eol", "svgoEol", "svgo_eol"]);
+    options.final_newline = recipe_bool(step, &["finalNewline", "final_newline", "svgoFinalNewline", "svgo_final_newline"], false);
+    options.datauri = recipe_string(step, &["datauri", "dataUri", "data_uri", "svgoDatauri", "svgo_datauri"]);
+    Ok(options)
+}
+
+fn recipe_trace_options(step: &Value) -> Result<TraceOptionsCore> {
+    let mut options = TraceOptionsCore::default();
+    if let Some(mode) = recipe_string(step, &["mode"]) {
+        options.mode = mode;
+    }
+    if let Some(curve_mode) = recipe_string(step, &["curveMode", "curve_mode"]) {
+        options.curve_mode = curve_mode;
+    }
+    if let Some(value) = recipe_usize(step, &["alphaThreshold", "alpha_threshold"])? {
+        options.alpha_threshold = value.min(255) as u8;
+    }
+    if let Some(value) = recipe_usize(step, &["whiteThreshold", "white_threshold"])? {
+        options.white_threshold = value.min(255) as u8;
+    }
+    options.drop_white = recipe_bool(step, &["dropWhite", "drop_white"], false);
+    if let Some(value) = recipe_usize(step, &["quantize"])? {
+        options.quantize = value.max(1).min(255) as u8;
+    }
+    if let Some(value) = recipe_usize(step, &["maxColors", "max_colors"])? {
+        options.max_colors = value;
+    }
+    if let Some(value) = recipe_usize(step, &["minArea", "min_area"])? {
+        options.min_area = value;
+    }
+    if let Some(value) = recipe_f64(step, &["scale"])? {
+        options.scale = value;
+    }
+    if let Some(value) = recipe_usize(step, &["decimals", "precision"])? {
+        options.decimals = value;
+    }
+    options.title = recipe_string(step, &["title"]);
+    options.palette = recipe_string_list(step, &["palette"])?;
+    Ok(options)
+}
+
+fn recipe_vtracer_options(step: &Value) -> Result<VTracerOptionsCore> {
+    let mut options = VTracerOptionsCore::default();
+    if let Some(value) = recipe_string(step, &["colorMode", "color_mode"]) {
+        options.color_mode = value;
+    }
+    if let Some(value) = recipe_string(step, &["hierarchical", "clustering"]) {
+        options.hierarchical = value;
+    }
+    if let Some(value) = recipe_usize(step, &["colorPrecision", "color_precision"])? {
+        options.color_precision = value;
+    }
+    if let Some(value) = recipe_usize(step, &["gradientStep", "gradient_step"])? {
+        options.gradient_step = value;
+    }
+    if let Some(value) = recipe_usize(step, &["filterSpeckle", "filter_speckle"])? {
+        options.filter_speckle = value;
+    }
+    if let Some(value) = recipe_string(step, &["curveMode", "curve_mode"]) {
+        options.curve_mode = value;
+    }
+    if let Some(value) = recipe_usize(step, &["cornerThreshold", "corner_threshold"])? {
+        options.corner_threshold = value;
+    }
+    if let Some(value) = recipe_f64(step, &["segmentLength", "segment_length"])? {
+        options.segment_length = value;
+    }
+    if let Some(value) = recipe_usize(step, &["maxIterations", "max_iterations"])? {
+        options.max_iterations = value;
+    }
+    if let Some(value) = recipe_usize(step, &["spliceThreshold", "splice_threshold"])? {
+        options.splice_threshold = value;
+    }
+    if let Some(value) = recipe_usize(step, &["pathPrecision", "path_precision", "decimals", "precision"])? {
+        options.path_precision = value;
+    }
+    parse_vtracer_options(Some(&serde_json::to_string(&options).unwrap()))?;
+    Ok(options)
+}
+
+fn recipe_center_options(step: &Value) -> Result<CenterlineOptionsCore> {
+    let mut options = CenterlineOptionsCore::default();
+    if let Some(value) = recipe_string(step, &["emit"]) {
+        options.emit = value;
+    }
+    if let Some(value) = recipe_string(step, &["mode"]) {
+        options.mode = value;
+    }
+    if let Some(value) = recipe_f64(step, &["scale"])? {
+        options.scale = value;
+    }
+    if let Some(value) = recipe_usize(step, &["maxSize", "max_size"])? {
+        options.max_size = value;
+    }
+    if let Some(value) = recipe_usize(step, &["curveSamples", "curve_samples"])? {
+        options.curve_samples = value;
+    }
+    if let Some(value) = recipe_f64(step, &["simplify"])? {
+        options.simplify = value;
+    }
+    if let Some(value) = recipe_f64(step, &["minLength", "min_length"])? {
+        options.min_length = value;
+    }
+    if let Some(value) = recipe_string(step, &["strokeWidth", "stroke_width"]) {
+        options.stroke_width = value;
+    }
+    if let Some(value) = recipe_string(step, &["linecap", "lineCap", "line_cap"]) {
+        options.linecap = value;
+    }
+    if let Some(value) = recipe_string(step, &["linejoin", "lineJoin", "line_join"]) {
+        options.linejoin = value;
+    }
+    if let Some(value) = recipe_usize(step, &["decimals", "precision"])? {
+        options.decimals = value;
+    }
+    options.polyline = recipe_bool(step, &["polyline"], false);
+    if let Some(value) = recipe_string(step, &["fillRule", "fill_rule"]) {
+        options.fill_rule = value;
+    }
+    if let Some(value) = recipe_string(step, &["svgPaths", "svg_paths"]) {
+        options.svg_paths = value;
+    }
+    options.keep_failed = recipe_bool(step, &["keepFailed", "keep_failed"], false);
+    if let Some(value) = recipe_f64(step, &["bridgeGap", "bridge_gap"])? {
+        options.bridge_gap = value;
+    }
+    Ok(options)
+}
+
+fn recipe_current_text(current: &Option<String>, input_path: &Path) -> Result<String> {
+    if let Some(text) = current {
+        Ok(text.clone())
+    } else {
+        fs::read_to_string(input_path).map_err(|e| SvgoError(e.to_string()))
+    }
+}
+
+fn recipe_step_command(step: &Value) -> Result<String> {
+    recipe_string(step, &["command", "cmd", "use", "uses", "op"])
+        .map(|command| command.to_ascii_lowercase())
+        .ok_or_else(|| SvgoError("recipe step requires a command".to_string()))
+}
+
+fn apply_recipe_step(current: Option<String>, input_path: &Path, step: &Value) -> Result<(Option<String>, Value)> {
+    let command = recipe_step_command(step)?;
+    let mut report = json!({"command": command.clone()});
+    let next = match command.as_str() {
+        "trace" | "t" => {
+            let image = read_png(input_path)?;
+            let options = recipe_trace_options(step)?;
+            if recipe_bool(step, &["componentsJson", "components_json"], false) {
+                Some(trace_components_value(&image, options)?.to_string())
+            } else {
+                Some(trace_image_core(&image, options)?)
+            }
+        }
+        "trace2" | "t2" => {
+            let image = match read_png(input_path) {
+                Ok(image) => image,
+                Err(err) => {
+                    if fs::read(input_path).is_ok_and(|data| data.starts_with(PNG_SIGNATURE)) {
+                        return Ok((Some(r#"<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>"#.to_string()), report));
+                    }
+                    return Err(err);
+                }
+            };
+            let options = recipe_vtracer_options(step)?;
+            let trace_options = TraceOptionsCore {
+                mode: if options.color_mode == "binary" { "alpha".to_string() } else { "palette".to_string() },
+                max_colors: 1usize << options.color_precision.min(4),
+                quantize: (256usize / (1usize << options.color_precision.min(8))).max(1) as u8,
+                min_area: options.filter_speckle.max(1),
+                decimals: options.path_precision,
+                curve_mode: "pixel".to_string(),
+                ..Default::default()
+            };
+            Some(trace_image_core(&image, trace_options)?)
+        }
+        "sanitize" | "s" => {
+            let text = recipe_current_text(&current, input_path)?;
+            let precision = recipe_usize(step, &["precision"])?;
+            let remove_external_refs = recipe_bool(step, &["removeExternalRefs", "remove_external_refs"], false);
+            let allow_data_images = !recipe_bool(step, &["disallowDataImages", "disallow_data_images"], false);
+            let remove_styles = recipe_bool(step, &["removeStyles", "remove_styles"], false);
+            let remove_raster_images = recipe_bool(step, &["removeRasterImages", "remove_raster_images"], false);
+            Some(sanitize_svg_core(&text, precision, remove_external_refs, allow_data_images, remove_styles, remove_raster_images)?)
+        }
+        "convert" | "x" => {
+            let mut text = recipe_current_text(&current, input_path)?;
+            let precision = recipe_usize(step, &["precision"])?;
+            let mut plain = recipe_bool(step, &["toPlain", "to_plain", "plain"], false);
+            let mut shapes_to_paths = recipe_bool(step, &["shapesToPaths", "shapes_to_paths"], false);
+            let mut flatten_transforms = recipe_bool(step, &["flattenTransforms", "flatten_transforms"], false);
+            let mut flatten_groups = recipe_bool(step, &["flattenGroups", "flatten_groups"], false);
+            let inline_styles = recipe_bool(step, &["inlineStyles", "inline_styles"], false);
+            let sanitize = recipe_bool(step, &["sanitize"], false);
+            let all = recipe_bool(step, &["all"], false);
+            let explicit = plain || shapes_to_paths || flatten_transforms || flatten_groups || inline_styles || sanitize || all;
+            if sanitize || all {
+                text = sanitize_svg_core(&text, precision, false, true, false, false)?;
+            }
+            if inline_styles || all {
+                text = inline_styles_svg(&text, precision, true).map_err(|e| SvgoError(e.to_string()))?;
+            }
+            plain = plain || all;
+            shapes_to_paths = shapes_to_paths || all || !explicit;
+            flatten_transforms = flatten_transforms || all;
+            flatten_groups = flatten_groups || all;
+            if plain && !(shapes_to_paths || flatten_transforms || flatten_groups) {
+                Some(to_plain_svg_core(&text, precision)?)
+            } else if shapes_to_paths && !(plain || flatten_transforms || flatten_groups) {
+                Some(convert_shapes_svg(&text, precision).map_err(|e| SvgoError(e.to_string()))?)
+            } else {
+                Some(flatten_svg(&text, precision, flatten_transforms, flatten_groups, shapes_to_paths, plain).map_err(|e| SvgoError(e.to_string()))?)
+            }
+        }
+        "viewbox" | "b" => {
+            let mut text = recipe_current_text(&current, input_path)?;
+            let precision = recipe_usize(step, &["precision"])?;
+            let remove_dimensions = recipe_bool(step, &["removeDimensions", "remove_dimensions"], false);
+            if recipe_bool(step, &["fitContent", "fit_content"], false) {
+                let padding = recipe_f64(step, &["padding"])?.unwrap_or(0.0);
+                text = fit_viewbox_svg(&text, padding, precision, remove_dimensions).map_err(|e| SvgoError(e.to_string()))?;
+            } else if let Some(viewbox) = recipe_string(step, &["set", "viewBox", "viewbox"]) {
+                text = set_viewbox_svg_core(&text, &viewbox, precision, remove_dimensions)?;
+            } else if remove_dimensions {
+                return Err("--remove-dimensions requires set/viewBox or fitContent in recipe viewbox step".into());
+            }
+            let width = recipe_string(step, &["width"]);
+            let height = recipe_string(step, &["height"]);
+            if width.is_some() || height.is_some() {
+                text = resize_svg(&text, width.as_deref(), height.as_deref()).map_err(|e| SvgoError(e.to_string()))?;
+            }
+            Some(text)
+        }
+        "path" | "p" => {
+            let text = recipe_current_text(&current, input_path)?;
+            let select = recipe_string(step, &["select"]).unwrap_or_else(|| "all".to_string());
+            let ops = recipe_string_list(step, &["ops", "op"])?;
+            let decimals = recipe_usize(step, &["decimals", "precision"])?.unwrap_or(4);
+            let minify = recipe_bool(step, &["minify"], false);
+            let svgo = recipe_bool(step, &["svgo"], false);
+            let svgo_order = recipe_string(step, &["svgoOrder", "svgo_order"]).unwrap_or_else(|| "after".to_string());
+            Some(edit_svg_text(&text, &select, &ops, decimals, minify, Some(recipe_opt_options(step)?), &svgo_order, svgo)?)
+        }
+        "center" | "c" => {
+            let options = recipe_center_options(step)?;
+            if let Some(path) = recipe_string(step, &["path", "d"]) {
+                let (d, stroke_width, ctx) = centerline_path_data_core(&path, options.clone())?;
+                Some(build_centerline_output(&d, &options.emit, stroke_width, &options, ctx))
+            } else {
+                let text = recipe_current_text(&current, input_path)?;
+                if contains_svg_markup(&text) && options.svg_paths == "all" {
+                    Some(centerline_svg_text_core(&text, options.clone())?)
+                } else {
+                    let d = find_d_attributes(&text).first().map(|m| m.3.clone()).unwrap_or(text.trim().to_string());
+                    let (center_d, stroke_width, ctx) = centerline_path_data_core(&d, options.clone())?;
+                    Some(build_centerline_output(&center_d, &options.emit, stroke_width, &options, ctx))
+                }
+            }
+        }
+        "opt" | "o" => {
+            let text = recipe_current_text(&current, input_path)?;
+            Some(optimize_svg_core(&text, recipe_opt_options(step)?)?)
+        }
+        "validate" | "v" => {
+            let text = recipe_current_text(&current, input_path)?;
+            let strict = recipe_bool(step, &["strict"], false);
+            let result = validate_svg_value(&text, strict);
+            let valid = result.get("valid").and_then(Value::as_bool).unwrap_or(false);
+            if let Some(map) = report.as_object_mut() {
+                map.insert("valid".to_string(), json!(valid));
+                map.insert("issues".to_string(), result.get("issues").cloned().unwrap_or_else(|| json!([])));
+            }
+            if !valid && recipe_bool(step, &["fail", "failOnInvalid", "fail_on_invalid"], true) {
+                return Err(SvgoError(format!("recipe validation failed for {}", input_path.display())));
+            }
+            Some(text)
+        }
+        "info" | "i" => {
+            let text = recipe_current_text(&current, input_path)?;
+            if let Some(map) = report.as_object_mut() {
+                map.insert("info".to_string(), get_svg_info_value(&text));
+            }
+            Some(text)
+        }
+        "measure" | "m" => {
+            let text = recipe_current_text(&current, input_path)?;
+            let decimals = recipe_usize(step, &["decimals", "precision"])?;
+            let error = recipe_f64(step, &["error"])?.unwrap_or(0.01);
+            if let Some(map) = report.as_object_mut() {
+                map.insert("metrics".to_string(), svg_metrics_value(&text, decimals, error));
+            }
+            Some(text)
+        }
+        _ => return Err(SvgoError(format!("unknown recipe command {}", command))),
+    };
+    Ok((next, report))
+}
+
+fn recipe_template(kind: &str) -> Result<Value> {
+    match kind {
+        "cleanup" | "svg-cleanup" => Ok(json!({
+            "name": "svg-cleanup",
+            "description": "Sanitize, flatten, fit the viewBox, validate, and optimize SVG files.",
+            "outputExtension": ".svg",
+            "steps": [
+                {"command": "sanitize", "removeExternalRefs": true},
+                {"command": "convert", "all": true, "precision": 3},
+                {"command": "viewbox", "fitContent": true, "padding": 1, "removeDimensions": true, "precision": 3},
+                {"command": "validate", "strict": true},
+                {"command": "opt", "multipass": true, "precision": 3}
+            ]
+        })),
+        "centerline-icons" | "png-centerline" => Ok(json!({
+            "name": "centerline-icons",
+            "description": "Trace palette PNG icons, reconstruct colored centerline strokes, and optimize SVG output.",
+            "outputExtension": ".svg",
+            "steps": [
+                {"command": "trace", "mode": "palette", "palette": ["#143861", "#00b795"], "dropWhite": true, "whiteThreshold": 245, "alphaThreshold": 16, "minArea": 80, "decimals": 1},
+                {"command": "center", "svgPaths": "all", "mode": "all", "polyline": true, "bridgeGap": 12, "keepFailed": true, "strokeWidth": "auto", "decimals": 2},
+                {"command": "opt", "multipass": true, "precision": 2}
+            ]
+        })),
+        "path-edit" => Ok(json!({
+            "name": "path-edit",
+            "description": "Apply ordered path operations, then optimize SVG output.",
+            "outputExtension": ".svg",
+            "steps": [
+                {"command": "path", "select": "all", "ops": ["absolute", "optimize:safe"], "decimals": 3, "minify": true},
+                {"command": "opt", "multipass": true, "precision": 3}
+            ]
+        })),
+        _ => Err(SvgoError(format!("unknown recipe template kind {}", kind))),
+    }
+}
+
+fn run_recipe_init_cli(args: &[String]) -> Result<String> {
+    let mut cursor = ArgCursor::new(args);
+    let mut output = None;
+    let mut kind = "cleanup".to_string();
+    while let Some(arg) = cursor.next() {
+        match arg.as_str() {
+            "--output" | "-o" => output = Some(cursor.value("--output")?),
+            "--kind" => kind = cursor.value("--kind")?,
+            _ => return Err(SvgoError(format!("unknown option {}", arg))),
+        }
+    }
+    let text = serde_json::to_string_pretty(&recipe_template(&kind)?).unwrap();
+    write_file_or_return(text, output)
+}
+
+fn collect_recipe_inputs(input: &Path) -> Result<Vec<PathBuf>> {
+    if input.is_file() {
+        return Ok(vec![input.to_path_buf()]);
+    }
+    if !input.is_dir() {
+        return Err(SvgoError(format!("recipe input does not exist: {}", input.display())));
+    }
+    let mut files = Vec::new();
+    for entry in fs::read_dir(input).map_err(|e| SvgoError(e.to_string()))? {
+        let path = entry.map_err(|e| SvgoError(e.to_string()))?.path();
+        if path.is_file() {
+            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+            if ext == "svg" || ext == "png" {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    if files.is_empty() {
+        return Err(SvgoError(format!("no SVG or PNG files found in {}", input.display())));
+    }
+    Ok(files)
+}
+
+fn recipe_output_extension(recipe: &Value) -> String {
+    recipe_string(recipe, &["outputExtension", "output_extension"])
+        .unwrap_or_else(|| ".svg".to_string())
+        .trim_start_matches('.')
+        .to_string()
+}
+
+fn recipe_output_for(input_path: &Path, root_input: &Path, output: Option<&Path>, recipe: &Value, multiple: bool) -> Result<Option<PathBuf>> {
+    let Some(output) = output else {
+        if multiple {
+            return Err("--output is required when recipe input is a directory".into());
+        }
+        return Ok(None);
+    };
+    if multiple || root_input.is_dir() || output.is_dir() || output.extension().is_none() {
+        let stem = input_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| SvgoError(format!("could not derive output name for {}", input_path.display())))?;
+        Ok(Some(output.join(format!("{}.{}", stem, recipe_output_extension(recipe)))))
+    } else {
+        Ok(Some(output.to_path_buf()))
+    }
+}
+
+fn write_recipe_output(path: &Path, text: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| SvgoError(e.to_string()))?;
+        }
+    }
+    fs::write(path, if text.ends_with('\n') { text.to_string() } else { format!("{}\n", text) }).map_err(|e| SvgoError(e.to_string()))
+}
+
+fn run_recipe_on_file(recipe: &Value, input_path: &Path) -> Result<(String, Value)> {
+    let steps = recipe
+        .get("steps")
+        .and_then(Value::as_array)
+        .ok_or_else(|| SvgoError("recipe requires a steps array".to_string()))?;
+    if steps.is_empty() {
+        return Err("recipe steps array is empty".into());
+    }
+    let mut current = None;
+    let mut step_reports = Vec::new();
+    for (index, step) in steps.iter().enumerate() {
+        let (next, mut report) = apply_recipe_step(current, input_path, step)?;
+        if let Some(map) = report.as_object_mut() {
+            map.insert("index".to_string(), json!(index));
+        }
+        current = next;
+        step_reports.push(report);
+    }
+    let output = recipe_current_text(&current, input_path)?;
+    let bytes = output.len();
+    let report = json!({
+        "input": input_path.display().to_string(),
+        "steps": step_reports,
+        "bytes": bytes
+    });
+    Ok((output, report))
+}
+
+fn run_recipe_run_cli(args: &[String]) -> Result<String> {
+    let mut cursor = ArgCursor::new(args);
+    let mut recipe_path = None;
+    let mut input = None;
+    let mut output = None;
+    let mut report_path = None;
+    let mut compact = false;
+    while let Some(arg) = cursor.next() {
+        match arg.as_str() {
+            "--recipe" | "-r" => recipe_path = Some(cursor.value("--recipe")?),
+            "--input" | "-i" => input = Some(cursor.value("--input")?),
+            "--output" | "-o" => output = Some(cursor.value("--output")?),
+            "--report" => report_path = Some(cursor.value("--report")?),
+            "--compact" => compact = true,
+            _ => return Err(SvgoError(format!("unknown option {}", arg))),
+        }
+    }
+    let recipe_path = recipe_path.ok_or_else(|| SvgoError("--recipe is required".to_string()))?;
+    let input = input.ok_or_else(|| SvgoError("--input is required".to_string()))?;
+    let recipe_text = read_file(&recipe_path)?;
+    let recipe: Value = serde_json::from_str(&recipe_text).map_err(|e| SvgoError(format!("Invalid recipe JSON: {}", e)))?;
+    let input_path = PathBuf::from(input);
+    let output_path = output.as_ref().map(|value| PathBuf::from(value.as_str()));
+    let inputs = collect_recipe_inputs(&input_path)?;
+    let multiple = inputs.len() > 1 || input_path.is_dir();
+    let mut reports = Vec::new();
+    let mut single_stdout = None;
+    for path in inputs {
+        let (text, mut item_report) = run_recipe_on_file(&recipe, &path)?;
+        let target = recipe_output_for(&path, &input_path, output_path.as_deref(), &recipe, multiple)?;
+        if let Some(target) = target {
+            write_recipe_output(&target, &text)?;
+            if let Some(map) = item_report.as_object_mut() {
+                map.insert("output".to_string(), json!(target.display().to_string()));
+            }
+        } else {
+            single_stdout = Some(text);
+        }
+        reports.push(item_report);
+    }
+    if let Some(report_path) = report_path {
+        let report_text = if compact { serde_json::to_string(&reports).unwrap() } else { serde_json::to_string_pretty(&reports).unwrap() };
+        write_recipe_output(Path::new(&report_path), &report_text)?;
+    }
+    if let Some(text) = single_stdout {
+        Ok(text)
+    } else if compact {
+        Ok(serde_json::to_string(&reports).unwrap())
+    } else {
+        Ok(serde_json::to_string_pretty(&reports).unwrap())
+    }
+}
+
+fn run_recipe_cli(args: &[String]) -> Result<String> {
+    match args.first().map(String::as_str) {
+        Some("init") => run_recipe_init_cli(&args[1..]),
+        Some("run") => run_recipe_run_cli(&args[1..]),
+        Some(other) if other.starts_with('-') => run_recipe_run_cli(args),
+        Some(other) => Err(SvgoError(format!("unknown recipe action {}", other))),
+        None => Err("Use `svgo recipe init` or `svgo recipe run`".into()),
+    }
+}
+
 fn is_help_arg(arg: &str) -> bool {
     arg == "-h" || arg == "--help" || arg == "help"
 }
@@ -999,6 +1622,32 @@ List built-in optimizer plugins and presets.
 
 Example:
   svgo plugins"#.to_string(),
+        Some("recipe") | Some("r") => r#"Usage:
+  svgo recipe init [--kind <cleanup|centerline-icons|path-edit>] [--output <FILE>]
+  svgo recipe run --recipe <JSON_FILE> --input <FILE_OR_DIR> [--output <FILE_OR_DIR>] [--report <FILE>]
+  svgo r ...
+
+Build and run declarative JSON recipes from existing svgo commands.
+
+Actions:
+  init                       Emit a starter JSON recipe.
+  run                        Apply a recipe to one SVG/PNG file or a directory.
+
+Run options:
+  -r, --recipe <FILE>        Recipe JSON file.
+  -i, --input <FILE_OR_DIR>  Input SVG/PNG file or directory.
+  -o, --output <FILE_OR_DIR> Write output. Required for directory input.
+  --report <FILE>            Write per-file step report JSON.
+  --compact                  Emit compact report JSON.
+
+Recipe steps use command names such as validate, sanitize, convert, viewbox,
+path, trace, trace2, center, opt, info, and measure. Step option names are the
+long CLI option names converted to JSON keys, for example fitContent,
+removeDimensions, svgPaths, bridgeGap, and multipass.
+
+Examples:
+  svgo recipe init --kind cleanup -o cleanup.svgo.json
+  svgo recipe run -r cleanup.svgo.json -i icons -o icons-out --report report.json"#.to_string(),
         _ => format!(
             r#"svgo {version}
 
@@ -1020,6 +1669,7 @@ Commands:
   viewbox, b       Edit viewBox, width, and height metadata.
   convert, x       Convert shapes, transforms, styles, and editor markup.
   plugins, l       List optimizer plugins.
+  recipe, r        Run declarative SVG conversion recipes.
 
 Use `svgo <command> --help` for command-specific options."#,
             version = env!("CARGO_PKG_VERSION")
@@ -1047,7 +1697,7 @@ fn cli_run_internal(args: Vec<String>) -> (i32, String, String) {
         return match command.as_str() {
             "path" | "p" | "opt" | "o" | "trace" | "t" | "trace2" | "t2" | "center" | "c"
             | "info" | "i" | "validate" | "v" | "measure" | "m" | "sanitize" | "s"
-            | "viewbox" | "b" | "convert" | "x" | "plugins" | "l" => {
+            | "viewbox" | "b" | "convert" | "x" | "plugins" | "l" | "recipe" | "r" => {
                 (0, help_text(Some(command.as_str())), String::new())
             }
             _ => (2, String::new(), format!("invalid choice: '{}'", command)),
@@ -1069,6 +1719,7 @@ fn cli_run_internal(args: Vec<String>) -> (i32, String, String) {
         "viewbox" | "b" => run_viewbox_cli(rest).map(|out| (0, out)),
         "convert" | "x" => run_convert_cli(rest).map(|out| (0, out)),
         "plugins" | "l" => Ok((0, plugin_list_text())),
+        "recipe" | "r" => run_recipe_cli(rest).map(|out| (0, out)),
         _ => return (2, String::new(), format!("invalid choice: '{}'", command)),
     };
     match result {

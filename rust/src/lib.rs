@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use xmltree::{Element, EmitterConfig, XMLNode};
 
 const SVG_NS: &str = "http://www.w3.org/2000/svg";

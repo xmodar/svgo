@@ -1,0 +1,32 @@
+{
+  "name": "two-color-centerline-icons",
+  "description": "Trace two-color antialiased PNG line icons, reconstruct colored centerline strokes, and optimize SVG output.",
+  "outputExtension": ".svg",
+  "steps": [
+    {
+      "command": "trace",
+      "mode": "palette",
+      "palette": ["#143861", "#00b795"],
+      "dropWhite": true,
+      "whiteThreshold": 245,
+      "alphaThreshold": 16,
+      "minArea": 80,
+      "decimals": 1
+    },
+    {
+      "command": "center",
+      "svgPaths": "all",
+      "mode": "all",
+      "polyline": true,
+      "bridgeGap": 12,
+      "keepFailed": true,
+      "strokeWidth": "auto",
+      "decimals": 2
+    },
+    {
+      "command": "opt",
+      "multipass": true,
+      "precision": 2
+    }
+  ]
+}
