@@ -151,6 +151,6 @@ __all__ = [
 
 from . import _svgo as _rust
 
-__version__ = getattr(_rust, "__version__", "0.3.0")
+__version__ = getattr(_rust, "__version__", "0.4.0")
 
 del _rust

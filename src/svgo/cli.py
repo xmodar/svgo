@@ -13,7 +13,7 @@ def _version_text() -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if args and args[0] in {"--version", "-V", "version"}:
+    if args and args[0] in {"--version", "-v", "-V", "version"}:
         sys.stdout.write(_version_text() + "\n")
         return 0
 

@@ -28,7 +28,43 @@ class CliTests(unittest.TestCase):
     def test_version_option(self):
         code, stdout, stderr = self.run_cli(["--version"])
         self.assertEqual(code, 0, stderr)
-        self.assertEqual(stdout.strip(), "svgo 0.3.0")
+        self.assertEqual(stdout.strip(), "svgo 0.4.0")
+
+        code, stdout, stderr = self.run_cli(["-v"])
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(stdout.strip(), "svgo 0.4.0")
+
+    def test_top_level_help_options(self):
+        for flag in ("--help", "-h", "help"):
+            with self.subTest(flag=flag):
+                code, stdout, stderr = self.run_cli([flag])
+                self.assertEqual(code, 0, stderr)
+                self.assertIn("Usage:", stdout)
+                self.assertIn("svgo <command> [options]", stdout)
+                self.assertIn("svgo <command> --help", stdout)
+
+    def test_subcommand_help_options(self):
+        for argv, expected in (
+            (["path", "--help"], "Edit raw SVG path data"),
+            (["p", "-h"], "svgo path --path <D>"),
+            (["opt", "--help"], "Optimize an SVG document"),
+            (["trace", "--help"], "Trace a non-interlaced"),
+            (["trace2", "--help"], "VTracer-compatible"),
+            (["center", "--help"], "centerlines"),
+            (["info", "--help"], "structured SVG metadata"),
+            (["validate", "--help"], "Validate SVG XML"),
+            (["v", "--help"], "Alias for `svgo validate`"),
+            (["measure", "--help"], "Measure path or SVG geometry"),
+            (["sanitize", "--help"], "Remove active or unsafe"),
+            (["viewbox", "--help"], "Edit root SVG viewBox"),
+            (["convert", "--help"], "Convert and normalize"),
+            (["plugins", "--help"], "List built-in optimizer plugins"),
+        ):
+            with self.subTest(argv=argv):
+                code, stdout, stderr = self.run_cli(argv)
+                self.assertEqual(code, 0, stderr)
+                self.assertIn("Usage:", stdout)
+                self.assertIn(expected, stdout)
 
     def test_opt_alias(self):
         with tempfile.TemporaryDirectory() as tmp:
