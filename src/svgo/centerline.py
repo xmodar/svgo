@@ -38,6 +38,7 @@ class CenterlineOptions:
     fill_rule: str = "evenodd"
     svg_paths: str = "first"
     keep_failed: bool = False
+    bridge_gap: float = 0.0
 
 
 def _options_json(options: CenterlineOptions | None) -> str | None:

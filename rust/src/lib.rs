@@ -4279,6 +4279,8 @@ struct TraceOptionsCore {
     title: Option<String>,
     #[serde(default = "trace_default_curve_mode")]
     curve_mode: String,
+    #[serde(default)]
+    palette: Vec<String>,
 }
 
 fn trace_default_mode() -> String {
@@ -4323,6 +4325,7 @@ impl Default for TraceOptionsCore {
             decimals: trace_default_decimals(),
             title: None,
             curve_mode: trace_default_curve_mode(),
+            palette: Vec::new(),
         }
     }
 }
@@ -4533,6 +4536,17 @@ fn nearest_color(color: [u8; 3], palette: &[[u8; 3]]) -> [u8; 3] {
         .unwrap_or(&color)
 }
 
+fn parse_hex_color(value: &str) -> Result<[u8; 3]> {
+    let raw = value.trim().trim_start_matches('#');
+    if raw.len() != 6 || !raw.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(SvgoError(format!("Invalid palette color: {}", value)));
+    }
+    let r = u8::from_str_radix(&raw[0..2], 16).map_err(|_| SvgoError(format!("Invalid palette color: {}", value)))?;
+    let g = u8::from_str_radix(&raw[2..4], 16).map_err(|_| SvgoError(format!("Invalid palette color: {}", value)))?;
+    let b = u8::from_str_radix(&raw[4..6], 16).map_err(|_| SvgoError(format!("Invalid palette color: {}", value)))?;
+    Ok([r, g, b])
+}
+
 fn group_pixels(image: &ImageCore, options: &TraceOptionsCore) -> Result<HashMap<[u8; 3], HashSet<(usize, usize)>>> {
     let mut visible_pixels = Vec::new();
     for row in 0..image.height {
@@ -4547,6 +4561,18 @@ fn group_pixels(image: &ImageCore, options: &TraceOptionsCore) -> Result<HashMap
         return Err("No visible pixels found".into());
     }
     let mut groups: HashMap<[u8; 3], HashSet<(usize, usize)>> = HashMap::new();
+    if !options.palette.is_empty() {
+        let palette = options
+            .palette
+            .iter()
+            .map(|color| parse_hex_color(color))
+            .collect::<Result<Vec<_>>>()?;
+        for (row, col, pixel) in visible_pixels {
+            let color = nearest_color([pixel[0], pixel[1], pixel[2]], &palette);
+            groups.entry(color).or_default().insert((row, col));
+        }
+        return Ok(groups);
+    }
     if options.mode == "alpha" {
         let mut histogram: HashMap<[u8; 3], usize> = HashMap::new();
         for (_, _, pixel) in &visible_pixels {
@@ -4683,6 +4709,20 @@ fn color_hex(color: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
 }
 
+fn component_bbox(component: &HashSet<(usize, usize)>) -> (usize, usize, usize, usize) {
+    let mut min_row = usize::MAX;
+    let mut min_col = usize::MAX;
+    let mut max_row = 0usize;
+    let mut max_col = 0usize;
+    for &(row, col) in component {
+        min_row = min_row.min(row);
+        min_col = min_col.min(col);
+        max_row = max_row.max(row);
+        max_col = max_col.max(col);
+    }
+    (min_col, min_row, max_col + 1, max_row + 1)
+}
+
 fn escape_attr(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -4727,6 +4767,84 @@ fn trace_image_core(image: &ImageCore, options: TraceOptionsCore) -> Result<Stri
     }
     let groups = group_pixels(image, &options)?;
     build_trace_svg(image, &groups, &options)
+}
+
+fn trace_components_value(image: &ImageCore, options: TraceOptionsCore) -> Result<Value> {
+    if !["pixel", "exact"].contains(&options.curve_mode.as_str()) {
+        return Err("--curve-mode must be pixel or exact for svgo trace components".into());
+    }
+    if options.max_colors < 1 {
+        return Err("--max-colors must be at least 1".into());
+    }
+    if options.scale <= 0.0 {
+        return Err("--scale must be greater than zero".into());
+    }
+
+    let groups = group_pixels(image, &options)?;
+    let mut groups_sorted: Vec<_> = groups.iter().map(|(color, mask)| (*color, mask)).collect();
+    groups_sorted.sort_by(|(color_a, mask_a), (color_b, mask_b)| {
+        mask_b
+            .len()
+            .cmp(&mask_a.len())
+            .then_with(|| color_hex(*color_a).cmp(&color_hex(*color_b)))
+    });
+
+    let mut traced_components = Vec::new();
+    for (color, mask) in groups_sorted {
+        let mut split = components(mask);
+        split.retain(|component| component.len() >= options.min_area);
+        split.sort_by(|a, b| {
+            let bbox_a = component_bbox(a);
+            let bbox_b = component_bbox(b);
+            b.len()
+                .cmp(&a.len())
+                .then_with(|| bbox_a.1.cmp(&bbox_b.1))
+                .then_with(|| bbox_a.0.cmp(&bbox_b.0))
+        });
+
+        for component in split {
+            let loops = trace_edges(&component);
+            let d = path_from_loops(&loops, options.scale, options.decimals);
+            if d.is_empty() {
+                continue;
+            }
+            let (x0, y0, x1, y1) = component_bbox(&component);
+            traced_components.push(json!({
+                "color": color_hex(color),
+                "area": component.len(),
+                "bbox": {
+                    "x": x0 as f64 * options.scale,
+                    "y": y0 as f64 * options.scale,
+                    "width": (x1 - x0) as f64 * options.scale,
+                    "height": (y1 - y0) as f64 * options.scale,
+                },
+                "pixel_bbox": {
+                    "x": x0,
+                    "y": y0,
+                    "width": x1 - x0,
+                    "height": y1 - y0,
+                },
+                "d": d,
+            }));
+        }
+    }
+
+    if traced_components.is_empty() {
+        return Err("No traceable components survived --min-area".into());
+    }
+
+    let width = image.width as f64 * options.scale;
+    let height = image.height as f64 * options.scale;
+    Ok(json!({
+        "width": width,
+        "height": height,
+        "viewBox": format!(
+            "0 0 {} {}",
+            fmt_number(width, options.decimals, false),
+            fmt_number(height, options.decimals, false)
+        ),
+        "components": traced_components,
+    }))
 }
 
 fn build_trace_svg(image: &ImageCore, groups: &HashMap<[u8; 3], HashSet<(usize, usize)>>, options: &TraceOptionsCore) -> Result<String> {
@@ -4779,9 +4897,24 @@ fn trace_image(image_json: &str, options_json: Option<&str>) -> PyResult<String>
 }
 
 #[pyfunction]
+fn trace_image_components_json(image_json: &str, options_json: Option<&str>) -> PyResult<String> {
+    let image: ImageCore = serde_json::from_str(image_json)
+        .map_err(|e| PyValueError::new_err(format!("Invalid image JSON: {}", e)))?;
+    let value = trace_components_value(&image, parse_trace_options(options_json).map_err(py_err)?).map_err(py_err)?;
+    Ok(value.to_string())
+}
+
+#[pyfunction]
 fn trace_png(path: &str, options_json: Option<&str>) -> PyResult<String> {
     let image = read_png(Path::new(path)).map_err(py_err)?;
     trace_image_core(&image, parse_trace_options(options_json).map_err(py_err)?).map_err(py_err)
+}
+
+#[pyfunction]
+fn trace_png_components_json(path: &str, options_json: Option<&str>) -> PyResult<String> {
+    let image = read_png(Path::new(path)).map_err(py_err)?;
+    let value = trace_components_value(&image, parse_trace_options(options_json).map_err(py_err)?).map_err(py_err)?;
+    Ok(value.to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4920,6 +5053,8 @@ struct CenterlineOptionsCore {
     svg_paths: String,
     #[serde(default)]
     keep_failed: bool,
+    #[serde(default)]
+    bridge_gap: f64,
 }
 
 fn center_default_emit() -> String { "path".to_string() }
@@ -4954,6 +5089,7 @@ impl Default for CenterlineOptionsCore {
             fill_rule: center_default_fill_rule(),
             svg_paths: center_default_svg_paths(),
             keep_failed: false,
+            bridge_gap: 0.0,
         }
     }
 }
@@ -5426,6 +5562,139 @@ fn connected_components_skeleton(skeleton: &HashSet<(usize, usize)>) -> Vec<Hash
     components
 }
 
+fn node_clusters(nodes: &HashSet<(usize, usize)>) -> (Vec<HashSet<(usize, usize)>>, HashMap<(usize, usize), usize>) {
+    let mut remaining = nodes.clone();
+    let mut clusters = Vec::new();
+    let mut node_to_cluster = HashMap::new();
+    while let Some(first) = remaining.iter().next().copied() {
+        remaining.remove(&first);
+        let cluster_id = clusters.len();
+        let mut cluster = HashSet::from([first]);
+        let mut queue = VecDeque::from([first]);
+        while let Some(pixel) = queue.pop_front() {
+            for delta in NEIGHBORS {
+                let row = pixel.0 as isize + delta.0;
+                let col = pixel.1 as isize + delta.1;
+                if row < 0 || col < 0 {
+                    continue;
+                }
+                let neighbor = (row as usize, col as usize);
+                if remaining.remove(&neighbor) {
+                    cluster.insert(neighbor);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        for pixel in &cluster {
+            node_to_cluster.insert(*pixel, cluster_id);
+        }
+        clusters.push(cluster);
+    }
+    (clusters, node_to_cluster)
+}
+
+fn cluster_representative(cluster: &HashSet<(usize, usize)>) -> (usize, usize) {
+    let row_mean = cluster.iter().map(|p| p.0 as f64).sum::<f64>() / cluster.len() as f64;
+    let col_mean = cluster.iter().map(|p| p.1 as f64).sum::<f64>() / cluster.len() as f64;
+    cluster
+        .iter()
+        .copied()
+        .min_by(|a, b| {
+            let da = (a.0 as f64 - row_mean).hypot(a.1 as f64 - col_mean);
+            let db = (b.0 as f64 - row_mean).hypot(b.1 as f64 - col_mean);
+            da.partial_cmp(&db)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| a.cmp(b))
+        })
+        .unwrap()
+}
+
+fn skeleton_component_endpoints(component: &HashSet<(usize, usize)>) -> Vec<(usize, usize)> {
+    let endpoints: Vec<_> = component
+        .iter()
+        .copied()
+        .filter(|pixel| skeleton_neighbors(*pixel, component).len() <= 1)
+        .collect();
+    if endpoints.is_empty() && component.len() == 1 {
+        component.iter().copied().collect()
+    } else {
+        endpoints
+    }
+}
+
+fn draw_pixel_line(a: (usize, usize), b: (usize, usize), height: usize, width: usize) -> Vec<(usize, usize)> {
+    let (mut y0, mut x0) = (a.0 as isize, a.1 as isize);
+    let (y1, x1) = (b.0 as isize, b.1 as isize);
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    let mut points = Vec::new();
+    loop {
+        if y0 >= 0 && x0 >= 0 && y0 < height as isize && x0 < width as isize {
+            points.push((y0 as usize, x0 as usize));
+        }
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x0 += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y0 += sy;
+        }
+    }
+    points
+}
+
+fn bridge_skeleton_gaps(skeleton: &HashSet<(usize, usize)>, height: usize, width: usize, max_gap_px: f64) -> HashSet<(usize, usize)> {
+    if max_gap_px <= 0.0 {
+        return skeleton.clone();
+    }
+    let mut bridged = skeleton.clone();
+    for _ in 0..128 {
+        let components = connected_components_skeleton(&bridged);
+        if components.len() < 2 {
+            break;
+        }
+        let endpoints: Vec<Vec<(usize, usize)>> = components.iter().map(skeleton_component_endpoints).collect();
+        let mut best: Option<(f64, (usize, usize), (usize, usize))> = None;
+        for i in 0..components.len() {
+            if endpoints[i].is_empty() {
+                continue;
+            }
+            for j in i + 1..components.len() {
+                if endpoints[j].is_empty() {
+                    continue;
+                }
+                for &a in &endpoints[i] {
+                    for &b in &endpoints[j] {
+                        let dist = (a.0 as f64 - b.0 as f64).hypot(a.1 as f64 - b.1 as f64);
+                        if dist <= max_gap_px && best.is_none_or(|(best_dist, _, _)| dist < best_dist) {
+                            best = Some((dist, a, b));
+                        }
+                    }
+                }
+            }
+        }
+        let Some((_dist, a, b)) = best else {
+            break;
+        };
+        let before = bridged.len();
+        for pixel in draw_pixel_line(a, b, height, width) {
+            bridged.insert(pixel);
+        }
+        if bridged.len() == before {
+            break;
+        }
+    }
+    bridged
+}
+
 fn farthest_path(component: &HashSet<(usize, usize)>, start: (usize, usize)) -> Vec<(usize, usize)> {
     fn bfs(component: &HashSet<(usize, usize)>, origin: (usize, usize)) -> ((usize, usize), HashMap<(usize, usize), Option<(usize, usize)>>) {
         let mut parents = HashMap::from([(origin, None)]);
@@ -5449,6 +5718,54 @@ fn farthest_path(component: &HashSet<(usize, usize)>, start: (usize, usize)) -> 
         path.push(*parent);
     }
     path.reverse();
+    path
+}
+
+fn cycle_path(component: &HashSet<(usize, usize)>) -> Vec<(usize, usize)> {
+    let Some(start) = component.iter().copied().min() else {
+        return Vec::new();
+    };
+    let mut neighbors = skeleton_neighbors(start, component);
+    neighbors.sort();
+    let Some(mut current) = neighbors.first().copied() else {
+        return vec![start];
+    };
+
+    let mut path = vec![start];
+    let mut visited = HashSet::from([start]);
+    let mut previous = start;
+    for _ in 0..component.len() + 2 {
+        path.push(current);
+        if current == start {
+            break;
+        }
+        visited.insert(current);
+        let mut candidates: Vec<_> = skeleton_neighbors(current, component)
+            .into_iter()
+            .filter(|pixel| *pixel != previous)
+            .collect();
+        candidates.sort();
+        if candidates.is_empty() {
+            break;
+        }
+        let next = candidates
+            .iter()
+            .copied()
+            .find(|pixel| !visited.contains(pixel))
+            .or_else(|| {
+                if visited.len() >= component.len() {
+                    candidates.iter().copied().find(|pixel| *pixel == start)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(candidates[0]);
+        previous = current;
+        current = next;
+    }
+    if path.last().is_some_and(|last| *last != start) && visited.len() >= component.len() {
+        path.push(start);
+    }
     path
 }
 
@@ -5477,22 +5794,33 @@ fn trace_skeleton(skeleton: &HashSet<(usize, usize)>, mode: &str, min_length_px:
                 .filter(|pixel| skeleton_neighbors(*pixel, &component).len() != 2)
                 .collect();
             if nodes.is_empty() {
-                paths.push(farthest_path(&component, starts[0]));
+                paths.push(cycle_path(&component));
                 continue;
             }
-            for node in &nodes {
-                for neighbor in skeleton_neighbors(*node, &component) {
-                    let mut edge = [*node, neighbor];
+            let (clusters, node_to_cluster) = node_clusters(&nodes);
+            let cluster_reps: Vec<_> = clusters.iter().map(cluster_representative).collect();
+            for (cluster_id, cluster) in clusters.iter().enumerate() {
+                let mut cluster_nodes: Vec<_> = cluster.iter().copied().collect();
+                cluster_nodes.sort();
+                for node in cluster_nodes {
+                    let mut neighbors = skeleton_neighbors(node, &component);
+                    neighbors.sort();
+                    for neighbor in neighbors {
+                        if node_to_cluster.get(&neighbor).is_some_and(|id| *id == cluster_id) {
+                            continue;
+                        }
+                    let mut edge = [node, neighbor];
                     edge.sort();
                     if used_edges.contains(&edge) {
                         continue;
                     }
-                    let mut chain = vec![*node, neighbor];
+                    let mut chain = vec![cluster_reps[cluster_id], node, neighbor];
                     used_edges.insert(edge);
-                    let mut prev = *node;
+                    let mut prev = node;
                     let mut current = neighbor;
-                    while !nodes.contains(&current) {
-                        let candidates: Vec<_> = skeleton_neighbors(current, &component).into_iter().filter(|p| *p != prev).collect();
+                    while !node_to_cluster.contains_key(&current) {
+                        let mut candidates: Vec<_> = skeleton_neighbors(current, &component).into_iter().filter(|p| *p != prev).collect();
+                        candidates.sort();
                         let Some(next) = candidates.first().copied() else {
                             break;
                         };
@@ -5503,8 +5831,15 @@ fn trace_skeleton(skeleton: &HashSet<(usize, usize)>, mode: &str, min_length_px:
                         prev = current;
                         current = next;
                     }
+                    if let Some(target_cluster_id) = node_to_cluster.get(&current).copied() {
+                        let target_rep = cluster_reps[target_cluster_id];
+                        if chain.last().is_some_and(|last| *last != target_rep) {
+                            chain.push(target_rep);
+                        }
+                    }
                     paths.push(chain);
                 }
+            }
             }
         }
     }
@@ -5638,6 +5973,7 @@ fn centerline_path_data_core(path_data: &str, options: CenterlineOptionsCore) ->
     let skeleton = zhang_suen_thin(&mask, ctx.height, ctx.width)?;
     let distances = chamfer_distance(&mask, ctx.height, ctx.width);
     let stroke_width = estimate_stroke_width(&options.stroke_width, &skeleton, &distances, ctx.scale)?;
+    let skeleton = bridge_skeleton_gaps(&skeleton, ctx.height, ctx.width, options.bridge_gap.max(0.0) * ctx.scale);
     let min_length_px = (options.min_length * ctx.scale).max(0.0);
     let pixel_paths = trace_skeleton(&skeleton, &options.mode, min_length_px);
     let mut svg_paths = Vec::new();
@@ -6150,11 +6486,13 @@ fn run_trace_cli(args: &[String]) -> Result<String> {
     let mut cursor = ArgCursor::new(args);
     let mut input = None;
     let mut output = None;
+    let mut components_json = false;
     let mut options = TraceOptionsCore::default();
     while let Some(arg) = cursor.next() {
         match arg.as_str() {
             "--input" | "-i" => input = Some(cursor.value("--input")?),
             "--output" | "-o" => output = Some(cursor.value("--output")?),
+            "--components-json" => components_json = true,
             "--mode" => options.mode = cursor.value("--mode")?,
             "--curve-mode" => options.curve_mode = cursor.value("--curve-mode")?,
             "--alpha-threshold" => options.alpha_threshold = cursor.value("--alpha-threshold")?.parse().map_err(|_| SvgoError("--alpha-threshold must be an integer".to_string()))?,
@@ -6166,12 +6504,25 @@ fn run_trace_cli(args: &[String]) -> Result<String> {
             "--scale" => options.scale = cursor.value("--scale")?.parse().map_err(|_| SvgoError("--scale must be a number".to_string()))?,
             "--decimals" => options.decimals = cursor.value("--decimals")?.parse().map_err(|_| SvgoError("--decimals must be an integer".to_string()))?,
             "--title" => options.title = Some(cursor.value("--title")?),
+            "--palette" => {
+                options.palette = cursor
+                    .value("--palette")?
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            }
             _ => return Err(SvgoError(format!("unknown option {}", arg))),
         }
     }
     let input = input.ok_or_else(|| SvgoError("--input is required".to_string()))?;
     let image = read_png(Path::new(&input))?;
-    write_file_or_return(trace_image_core(&image, options)?, output)
+    if components_json {
+        write_file_or_return(trace_components_value(&image, options)?.to_string(), output)
+    } else {
+        write_file_or_return(trace_image_core(&image, options)?, output)
+    }
 }
 
 fn run_trace2_cli(args: &[String]) -> Result<String> {
@@ -6249,6 +6600,7 @@ fn run_center_cli(args: &[String]) -> Result<String> {
             "--fill-rule" => options.fill_rule = cursor.value("--fill-rule")?,
             "--svg-paths" => options.svg_paths = cursor.value("--svg-paths")?,
             "--keep-failed" => options.keep_failed = true,
+            "--bridge-gap" => options.bridge_gap = cursor.value("--bridge-gap")?.parse().map_err(|_| SvgoError("--bridge-gap must be a number".to_string()))?,
             _ => return Err(SvgoError(format!("unknown option {}", arg))),
         }
     }
@@ -6609,6 +6961,8 @@ fn _svgo(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(resize_svg, m)?)?;
     m.add_function(wrap_pyfunction!(trace_image, m)?)?;
     m.add_function(wrap_pyfunction!(trace_png, m)?)?;
+    m.add_function(wrap_pyfunction!(trace_image_components_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trace_png_components_json, m)?)?;
     m.add_function(wrap_pyfunction!(trace_image_vtracer, m)?)?;
     m.add_function(wrap_pyfunction!(centerline_path_data_json, m)?)?;
     m.add_function(wrap_pyfunction!(centerline_svg_text, m)?)?;

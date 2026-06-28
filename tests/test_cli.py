@@ -59,6 +59,22 @@ class CliTests(unittest.TestCase):
         self.assertIn("<svg", stdout)
         self.assertIn("<path", stdout)
 
+    def test_trace_components_json(self):
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+            "AAAADUlEQVR42mNgYGD4DwABBAEAghF2NwAAAABJRU5ErkJggg=="
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "icon.png"
+            image.write_bytes(png)
+            code, stdout, stderr = self.run_cli(["trace", "--input", str(image), "--components-json", "--min-area", "1"])
+
+        self.assertEqual(code, 0, stderr)
+        info = json.loads(stdout)
+        self.assertEqual(info["viewBox"], "0 0 1 1")
+        self.assertEqual(len(info["components"]), 1)
+        self.assertIn("d", info["components"][0])
+
     def test_info_alias_outputs_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             svg = Path(tmp) / "icon.svg"

@@ -31,6 +31,7 @@ class TraceOptions:
     decimals: int = 3
     title: str | None = None
     curve_mode: str = "pixel"
+    palette: tuple[str, ...] = ()
 
 
 def _options_json(options: TraceOptions | None) -> str | None:
@@ -43,3 +44,11 @@ def trace_image(image: Image, options: TraceOptions | None = None) -> str:
 
 def trace_png(path: str | Path, options: TraceOptions | None = None) -> str:
     return _rust.trace_png(str(path), _options_json(options))
+
+
+def trace_image_components(image: Image, options: TraceOptions | None = None) -> dict:
+    return json.loads(_rust.trace_image_components_json(json.dumps(asdict(image)), _options_json(options)))
+
+
+def trace_png_components(path: str | Path, options: TraceOptions | None = None) -> dict:
+    return json.loads(_rust.trace_png_components_json(str(path), _options_json(options)))
