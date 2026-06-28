@@ -6872,7 +6872,11 @@ fn run_convert_cli(args: &[String]) -> Result<String> {
 }
 
 fn help_text() -> String {
-    "svgo <path|opt|trace|trace2|center|info|validate|measure|sanitize|viewbox|convert|plugins> [options]".to_string()
+    "svgo <path|opt|trace|trace2|center|info|validate|measure|sanitize|viewbox|convert|plugins> [options]\nsvgo --version".to_string()
+}
+
+fn version_text() -> String {
+    format!("svgo {}", env!("CARGO_PKG_VERSION"))
 }
 
 fn cli_run_internal(args: Vec<String>) -> (i32, String, String) {
@@ -6880,6 +6884,9 @@ fn cli_run_internal(args: Vec<String>) -> (i32, String, String) {
         return (0, help_text(), String::new());
     }
     let command = &args[0];
+    if command == "--version" || command == "-V" || command == "version" {
+        return (0, version_text(), String::new());
+    }
     let rest = &args[1..];
     let result = match command.as_str() {
         "path" | "p" => run_path_cli(rest).map(|out| (0, out)),
@@ -6923,6 +6930,7 @@ fn cli_run(args: Vec<String>) -> (i32, String, String) {
 
 #[pymodule]
 fn _svgo(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<PyPathData>()?;
     m.add_function(wrap_pyfunction!(parse_path_json, m)?)?;
     m.add_function(wrap_pyfunction!(path_to_absolute, m)?)?;

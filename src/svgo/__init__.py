@@ -149,4 +149,8 @@ __all__ = [
     "validate_svg_async",
 ]
 
-__version__ = "0.1.0"
+from . import _svgo as _rust
+
+__version__ = getattr(_rust, "__version__", "0.3.0")
+
+del _rust

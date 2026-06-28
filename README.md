@@ -36,6 +36,7 @@ From PyPI, once a release is available:
 
 ```powershell
 uvx svgo --help
+uvx svgo --version
 uv run --with svgo svgo --help
 ```
 
@@ -447,12 +448,12 @@ To publish a release, update `project.version`, commit the change, and push a
 matching tag:
 
 ```powershell
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 The workflow verifies that the pushed tag equals `v{project.version}`, runs the
-test suite, builds the wheel and source distribution with `uv`, then publishes
+test suite, builds ABI3 binary wheels and a source distribution, then publishes
 to PyPI with Trusted Publishing.
 
 The package targets Python 3.11 and newer.

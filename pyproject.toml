@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "svgo"
-version = "0.2.0"
+version = "0.3.0"
 description = "Rust SVG path editing, optimization, matrix geometry, measurement, sanitization, viewport editing, validation, tracing, and centerline reconstruction with Python bindings."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,6 +20,8 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Multimedia :: Graphics",
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
@@ -36,4 +38,4 @@ svgo = "svgo.__main__:main"
 [tool.maturin]
 python-source = "src"
 module-name = "svgo._svgo"
-features = ["pyo3/extension-module"]
+features = ["pyo3/extension-module", "pyo3/abi3-py311"]

@@ -25,6 +25,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0, stderr)
         self.assertIn("M10", stdout)
 
+    def test_version_option(self):
+        code, stdout, stderr = self.run_cli(["--version"])
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(stdout.strip(), "svgo 0.3.0")
+
     def test_opt_alias(self):
         with tempfile.TemporaryDirectory() as tmp:
             svg = Path(tmp) / "icon.svg"
